@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseCommand } from "../src/args";
+import { parseCommand } from "../src/command";
 
 describe("parseCommand", () => {
   test.each([{ argv: [] }, { argv: ["--"] }, { argv: [""] }])("requires a child executable: %j", ({ argv }) => {

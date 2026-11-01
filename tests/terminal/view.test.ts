@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
 import { createTestRenderer } from "@opentui/core/testing";
-import { mountTerminal } from "../src/terminal";
+import { mountTerminal } from "../../src/terminal/view";
+import { applyStatus, createChangesState } from "../../src/git/status";
+import type { GitStatusResult } from "../../src/git/status";
 
 async function waitForFrame(setup: Awaited<ReturnType<typeof createTestRenderer>>, text: string) {
   const deadline = Date.now() + 2000;
@@ -18,7 +20,7 @@ test("sidebar toggle and narrow-terminal collapse resize the actual child", asyn
   const session = mountTerminal(setup.renderer, {
     executable: "sh",
     args: ["-c", "stty -echo; echo ready; while read -r line; do stty size; done"],
-  }, process.cwd());
+  }, process.cwd(), createChangesState([]));
   async function askSize(expected: string) {
     await setup.mockInput.typeText("size");
     setup.mockInput.pressEnter();
@@ -54,7 +56,7 @@ test("ordinary keys, arrows, Ctrl+C, Unicode paste, and literal Ctrl+G reach the
       process.stdout.write("\\x1b[?2004hraw-ready\\r\\n");
       process.stdin.on("data", bytes => process.stdout.write("BYTES:" + bytes.toString("hex") + "\\r\\n"));
     `],
-  }, process.cwd());
+  }, process.cwd(), createChangesState([]));
   try {
     await waitForFrame(setup, "raw-ready");
     await setup.mockInput.typeText("x");
@@ -70,6 +72,37 @@ test("ordinary keys, arrows, Ctrl+C, Unicode paste, and literal Ctrl+G reach the
     setup.mockInput.pressKey("g", { ctrl: true });
     setup.mockInput.pressKey("g", { ctrl: true });
     await waitForFrame(setup, "BYTES:07");
+  } finally {
+    await session.dispose();
+    await setup.dispose();
+  }
+});
+
+test("Git status updates on the left while errors leave child input usable", async () => {
+  const setup = await createTestRenderer({ width: 120, height: 20, exitOnCtrlC: false });
+  const oldChange = { path: "old.ts", indexStatus: " ", worktreeStatus: "M" };
+  let state = createChangesState([oldChange]);
+  const session = mountTerminal(setup.renderer, {
+    executable: "sh", args: ["-c", "stty -echo; while read -r line; do printf 'reply:%s\\n' \"$line\"; done"],
+  }, process.cwd(), state);
+  const updateStatus = (result: GitStatusResult) => {
+    state = applyStatus(state, result);
+    session.setChanges(state);
+  };
+  try {
+    await waitForFrame(setup, " M* old.ts");
+    const firstRow = setup.captureCharFrame().split("\n")[0] ?? "";
+    expect(firstRow.indexOf("PorclainTree")).toBeLessThan(28);
+    updateStatus({ ok: true, changes: [oldChange, { path: "new.ts", indexStatus: "?", worktreeStatus: "?" }] });
+    await waitForFrame(setup, "??  new.ts");
+    updateStatus({ ok: false, error: "Git timed out" });
+    await waitForFrame(setup, "Git changes (stale)");
+    expect(setup.captureCharFrame()).toContain("old.ts");
+    await setup.mockInput.typeText("still-working");
+    setup.mockInput.pressEnter();
+    await waitForFrame(setup, "reply:still-working");
+    updateStatus({ ok: true, changes: [] });
+    await waitForFrame(setup, "No Git changes");
   } finally {
     await session.dispose();
     await setup.dispose();

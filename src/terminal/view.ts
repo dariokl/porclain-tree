@@ -1,18 +1,26 @@
-import { BoxRenderable, EmbeddedTerminalRenderable, KeyEvent, TextRenderable, createCliRenderer } from "@opentui/core";
+import { BoxRenderable, EmbeddedTerminalRenderable, KeyEvent, TextRenderable } from "@opentui/core";
 import type { CliRenderer } from "@opentui/core";
-import type { CommandSpec } from "./args";
+import type { CommandSpec } from "../command";
+import type { ChangesState } from "../git/status";
 import { startPty } from "./pty";
 import type { PtySession } from "./pty";
-import { reduceSidebar, sidebarColumns } from "./sidebar";
+import { formatChanges, reduceSidebar, sidebarColumns } from "./sidebar";
 import type { SidebarState } from "./sidebar";
 
 type MountedTerminal = Readonly<{
   exited: Promise<number>;
+  setChanges: (state: ChangesState) => void;
   dispose: () => Promise<void>;
 }>;
 
-export function mountTerminal(renderer: CliRenderer, command: CommandSpec, cwd: string): MountedTerminal {
+export function mountTerminal(
+  renderer: CliRenderer,
+  command: CommandSpec,
+  cwd: string,
+  initialChanges: ChangesState,
+): MountedTerminal {
   let state: SidebarState = { visible: true, lastToggleAt: null };
+  let changes = initialChanges;
   let child: PtySession | undefined;
   const layout = new BoxRenderable(renderer, {
     id: "workspace", width: "100%", height: "100%", flexDirection: "row",
@@ -27,9 +35,11 @@ export function mountTerminal(renderer: CliRenderer, command: CommandSpec, cwd: 
     id: "sidebar", width: sidebarColumns(renderer.width, true), height: "100%",
     flexShrink: 0, border: ["right"], borderColor: "#666666", paddingLeft: 1,
   });
-  sidebar.add(new TextRenderable(renderer, {
-    id: "instructions", content: "PorclainTree\n\nCompatibility prototype\n\nCtrl+G: hide/show\nDouble Ctrl+G: send key\n\nCLI keeps focus",
-  }));
+  const instructions = new TextRenderable(renderer, {
+    id: "changes", width: "100%", height: "100%", wrapMode: "none",
+    content: formatChanges(changes, renderer.height),
+  });
+  sidebar.add(instructions);
   layout.add(sidebar);
   layout.add(terminal);
   renderer.root.add(layout);
@@ -40,6 +50,7 @@ export function mountTerminal(renderer: CliRenderer, command: CommandSpec, cwd: 
     sidebar.visible = width > 0;
     terminal.width = Math.max(1, renderer.width - width);
     terminal.height = Math.max(1, renderer.height);
+    instructions.content = formatChanges(changes, renderer.height);
     child?.resize(Math.max(1, renderer.width - width), Math.max(1, renderer.height));
   };
   const ordinaryInput = () => { state = reduceSidebar(state, { type: "input" }).state; };
@@ -90,46 +101,13 @@ export function mountTerminal(renderer: CliRenderer, command: CommandSpec, cwd: 
       layout.destroyRecursively();
     }
   }
-  return { exited: session.exited, dispose: () => disposal ??= shutdown() };
-}
-
-export async function runTerminal(command: CommandSpec, cwd: string): Promise<number> {
-  const renderer = await createCliRenderer({
-    exitOnCtrlC: false, exitSignals: [], consoleMode: "disabled", openConsoleOnError: false,
-  });
-  let session: MountedTerminal | undefined;
-  let signalCode: number | undefined;
-  const failure = Promise.withResolvers<never>();
-  const stop = (code: number) => {
-    signalCode ??= code;
-    if (session) void session.dispose().catch(failure.reject);
+  return {
+    exited: session.exited,
+    setChanges(nextState) {
+      if (disposal) return;
+      changes = nextState;
+      instructions.content = formatChanges(changes, renderer.height);
+    },
+    dispose: () => disposal ??= shutdown(),
   };
-  const onTerm = () => stop(143);
-  const onHangup = () => stop(129);
-  const onInterrupt = () => stop(130);
-  const onError = (event: { error: Error }) => failure.reject(event.error);
-  process.on("SIGTERM", onTerm);
-  process.on("SIGHUP", onHangup);
-  process.on("SIGINT", onInterrupt);
-  renderer.on("render:error", onError);
-  renderer.on("handler:error", onError);
-  try {
-    session = mountTerminal(renderer, command, cwd);
-    renderer.start();
-    const code = await Promise.race([session.exited, failure.promise]);
-    return signalCode ?? code;
-  } finally {
-    try {
-      await session?.dispose();
-    } finally {
-      renderer.destroy();
-      try {
-        await renderer.closed;
-      } finally {
-        process.off("SIGTERM", onTerm);
-        process.off("SIGHUP", onHangup);
-        process.off("SIGINT", onInterrupt);
-      }
-    }
-  }
 }

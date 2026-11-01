@@ -1,37 +1,49 @@
 # PorclainTree
 
-A TypeScript terminal-wrapper prototype. It runs your existing CLI beside a passive sidebar so we can test terminal compatibility before building project-awareness features.
+A terminal wrapper that runs your CLI beside a live, read-only Git changes list. Use it with a coding assistant, a shell, or another interactive command.
 
-## Run locally
+## Getting started
 
-Tested on Linux with Bun 1.3.14 and `@opentui/core` 0.8.1. Install [Bun](https://bun.com/docs/installation), then:
+Requires Linux, [Bun](https://bun.com/docs/installation) 1.3.14 or newer, Git, and an interactive terminal.
+
+From this checkout, install dependencies and launch a command:
 
 ```sh
 bun install --frozen-lockfile
-bun run src/cli.ts -- bash
-bun run src/cli.ts -- codex
+bun start -- bash
+bun start -- codex
 ```
 
-Use an interactive terminal. The child receives your current working directory, environment, and literal arguments. To start it from another project, use the absolute path to this repository's `src/cli.ts`.
+The command keeps your working directory, environment, and arguments. To work in another Git repository, launch using the absolute path to this checkout's entry point:
+
+```sh
+cd /path/to/your/git-project
+bun run /absolute/path/to/porcelain/src/cli.ts -- codex
+```
+
+Start inside a Git working tree, including any subfolder. If the initial Git read fails, PorclainTree reports the error before launching your command.
+
+## Controls
 
 - **Ctrl+G:** hide/show the 28-column sidebar.
 - **Ctrl+G twice within 300 ms:** restore the previous sidebar state and send one literal Ctrl+G to the child.
 - Below 100 terminal columns, the sidebar automatically collapses; widening restores your selected visibility.
-- All other input stays with the child. Exit using the child's normal command or shortcut.
+- Exit using your command's normal controls. PorclainTree returns its exit code.
 
-The sidebar is a compatibility placeholder. Git changes, file browsing, and persistent logs are not implemented yet. Read-only exploration rules do not restrict the commands you intentionally run inside the child CLI.
+## Git sidebar
 
-## Checks
+The sidebar sits on the left and refreshes about once per second. Paths are relative to the Git repository root.
+
+- `*` marks paths that already had changes when you started. The list shows current Git changes; it does not attribute edits to a particular session or assistant.
+- Untracked folders may appear as a single entry. Ignored untracked files stay excluded.
+- Long paths show `…` and retain the filename end. An overflow count reports entries that do not fit vertically.
+- A failed refresh labels the last successful list as stale. The child stays usable, and a successful refresh clears the warning.
+
+## Development
 
 ```sh
 bun run typecheck
 bun test
 ```
 
-The suite includes real POSIX PTYs and native OpenTUI rendering, not only mocked processes. Current cleanup checks target Linux process groups; deliberately detached processes and other platforms are outside this prototype's verified scope.
-
-## First personal check
-
-Use your normal coding CLI for 10 minutes. Try multiline/Unicode paste, cursor movement, shortcuts, scrolling/copying, resizing, toggling the sidebar, Ctrl+C, and normal exit. Confirm the host terminal returns to normal afterward.
-
-Record what worked and any problems before adding features. The Git sidebar and later enhancements come after this compatibility checkpoint passes.
+The project uses TypeScript, Bun, and OpenTUI. Process cleanup targets Linux; commands that deliberately detach into their own session are outside the wrapper's cleanup scope.

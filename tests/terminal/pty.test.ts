@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
-import { startPty } from "../src/pty";
+import { startPty } from "../../src/terminal/pty";
 
 async function waitFor(predicate: () => boolean): Promise<void> {
   const deadline = Date.now() + 2000;

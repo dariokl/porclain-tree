@@ -1,4 +1,4 @@
-import type { CommandSpec } from "./args";
+import type { CommandSpec } from "../command";
 import { readdir, readFile } from "node:fs/promises";
 
 type PtyOptions = Readonly<{
