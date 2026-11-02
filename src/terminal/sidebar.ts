@@ -1,3 +1,4 @@
+import type { DiffSelection } from "../git/diff";
 import type { Change, ChangesState } from "../git/status";
 
 export type SidebarState = Readonly<{
@@ -53,15 +54,27 @@ export type SidebarTone = "text" | "muted" | "border" | "accent" | "added" | "mo
 type SidebarSpan = Readonly<{ text: string; tone: SidebarTone; bold?: boolean }>;
 export type SidebarLine = readonly SidebarSpan[];
 
-type Entry = Readonly<{ change: Change; status: string }>;
+type Entry = Readonly<{ change: Change; status: string; comparison: DiffSelection["comparison"] }>;
 type Group = Readonly<{ title: string; detail: string; entries: readonly Entry[] }>;
 
-function line(text: string, tone: SidebarTone = "text", bold = false): SidebarLine {
-  return [{ text, tone, bold }];
+type Row = Readonly<{ spans: SidebarLine; selection: DiffSelection | null }>;
+export type SidebarLayout = Readonly<{
+  lines: readonly SidebarLine[];
+  targets: readonly Readonly<{ row: number; selection: DiffSelection }>[];
+}>;
+function row(spans: SidebarLine, selection: DiffSelection | null = null): Row { return { spans, selection }; }
+function line(text: string, tone: SidebarTone = "text", bold = false): Row {
+  return row([{ text, tone, bold }]);
+}
+function layout(rows: readonly Row[], columns: number): SidebarLayout {
+  return {
+    lines: rows.map((value) => fitLine(value.spans, columns)),
+    targets: rows.flatMap((value, index) => value.selection ? [{ row: index, selection: value.selection }] : []),
+  };
 }
 
-function continuation(text = "", tone: SidebarTone = "muted"): SidebarLine {
-  return [{ text: text ? "┆  " : "┆", tone: "border" }, ...line(text, tone)];
+function continuation(text = "", tone: SidebarTone = "muted"): Row {
+  return row([{ text: text ? "┆  " : "┆", tone: "border" }, { text, tone }]);
 }
 
 function fitLine(spans: SidebarLine, columns: number): SidebarLine {
@@ -85,12 +98,12 @@ function groupChanges(changes: readonly Change[]): readonly Group[] {
   for (const change of changes) {
     const pair = change.indexStatus + change.worktreeStatus;
     if (pair.includes("U") || pair === "AA" || pair === "DD") {
-      conflicts.push({ change, status: pair });
+      conflicts.push({ change, status: pair, comparison: "conflict" });
     } else if (pair === "??") {
-      untracked.push({ change, status: "?" });
+      untracked.push({ change, status: "?", comparison: "untracked" });
     } else {
-      if (change.worktreeStatus !== " ") unstaged.push({ change, status: change.worktreeStatus });
-      if (change.indexStatus !== " ") staged.push({ change, status: change.indexStatus });
+      if (change.worktreeStatus !== " ") unstaged.push({ change, status: change.worktreeStatus, comparison: "unstaged" });
+      if (change.indexStatus !== " ") staged.push({ change, status: change.indexStatus, comparison: "staged" });
     }
   }
   return [
@@ -101,7 +114,7 @@ function groupChanges(changes: readonly Change[]): readonly Group[] {
   ].filter((group) => group.entries.length > 0);
 }
 
-function entryLines(entry: Entry, initialPaths: ReadonlySet<string>, columns: number): readonly SidebarLine[] {
+function entryLines(entry: Entry, initialPaths: ReadonlySet<string>, columns: number): readonly Row[] {
   const { change, status } = entry;
   const separator = parentSeparator(change.path);
   const name = safeDisplay(change.path.slice(separator + 1));
@@ -110,16 +123,18 @@ function entryLines(entry: Entry, initialPaths: ReadonlySet<string>, columns: nu
   const filename = clip(name, Math.max(0, columns - prefixWidth), "end");
   const tone: SidebarTone = status.length > 1 ? "warning" : status === "D" ? "deleted"
     : status === "?" || status === "A" ? "added" : status === "R" || status === "C" ? "accent" : "modified";
-  const rows: SidebarLine[] = [[
+  const selection: DiffSelection = { path: change.path, comparison: entry.comparison,
+    ...(change.previousPath === undefined ? {} : { previousPath: change.previousPath }) };
+  const rows: Row[] = [row([
     { text: "┆  ", tone: "border" },
     { text: status, tone },
     { text: initialPaths.has(change.path) ? "* " : "  ", tone: "muted" },
     { text: filename, tone: "text" },
-  ]];
-  if (directory) rows.push([
+  ], selection)];
+  if (directory) rows.push(row([
     { text: "┆" + " ".repeat(prefixWidth - 1), tone: "border" },
     { text: clip(directory, Math.max(0, columns - prefixWidth), "end"), tone: "muted" },
-  ]);
+  ], selection));
   return rows;
 }
 
@@ -127,7 +142,7 @@ function parentSeparator(path: string): number {
   return path.lastIndexOf("/", path.length - (path.endsWith("/") ? 2 : 1));
 }
 
-function changeLines(state: ChangesState, available: number, columns: number): readonly SidebarLine[] {
+function changeLines(state: ChangesState, available: number, columns: number): readonly Row[] {
   if (available <= 0) return [];
   if (state.changes.length === 0) {
     if (state.error) return [continuation("Last result: clean")];
@@ -142,7 +157,7 @@ function changeLines(state: ChangesState, available: number, columns: number): r
     + group.entries.reduce((size, entry) => size + (parentSeparator(entry.change.path) >= 0 ? 2 : 1), 0), 0)
     + Math.max(0, groups.length - 1);
   const limit = totalRows > available ? available - 1 : available;
-  const body: SidebarLine[] = [];
+  const body: Row[] = [];
   let shown = 0;
   outer: for (const group of groups) {
     const gap = body.length > 0 ? 1 : 0;
@@ -150,10 +165,10 @@ function changeLines(state: ChangesState, available: number, columns: number): r
     const firstHeight = first && parentSeparator(first.change.path) >= 0 ? 2 : 1;
     if (!first || body.length + gap + 2 + firstHeight > limit) break;
     if (gap) body.push(continuation());
-    body.push([
+    body.push(row([
       { text: "├─ ", tone: "accent" },
       { text: `${group.title.toLowerCase()} · ${group.entries.length}`, tone: "accent" },
-    ], continuation(group.detail));
+    ]), continuation(group.detail));
     for (const entry of group.entries) {
       const needed = parentSeparator(entry.change.path) >= 0 ? 2 : 1;
       if (body.length + needed > limit) break outer;
@@ -165,33 +180,33 @@ function changeLines(state: ChangesState, available: number, columns: number): r
   return body;
 }
 
-export function formatSidebar(
+export function sidebarLayout(
   state: ChangesState,
   projectName: string,
   rows: number,
   columns: number,
-): readonly SidebarLine[] {
+): SidebarLayout {
   const height = Math.max(0, Math.floor(rows));
   const width = Math.max(0, Math.floor(columns));
-  if (height === 0) return [];
-  const title: SidebarLine = [
+  if (height === 0) return layout([], width);
+  const title: Row = row([
     { text: "╭─ ", tone: "accent" },
     { text: "porclain", tone: "text", bold: true },
     { text: "/", tone: "accent", bold: true },
     { text: "tree", tone: "text", bold: true },
-  ];
+  ]);
   const count = String(new Set(state.changes.map((change) => change.path)).size);
-  const shortcut: SidebarLine = [{ text: "╰─ ", tone: "accent" }, { text: "Ctrl+G", tone: "text" }, { text: "  hide sidebar", tone: "muted" }];
+  const shortcut: Row = row([{ text: "╰─ ", tone: "accent" }, { text: "Ctrl+G", tone: "text" }, { text: "  hide sidebar", tone: "muted" }]);
   if (height < 5) {
-    if (height === 1) return [fitLine(title, width)];
+    if (height === 1) return layout([title], width);
     if (state.error && height >= 3) {
-      return [line("╭─ stale / last result", "warning"),
+      return layout([line("╭─ stale / last result", "warning"),
         ...(height === 4 ? [continuation("△ Git unavailable", "warning")] : []),
-        continuation(safeDisplay(state.error), "warning"), shortcut].map((row) => fitLine(row, width));
+        continuation(safeDisplay(state.error), "warning"), shortcut], width);
     }
     const top = [title, continuation(state.error ? "Git stale" : `${count} Git changes`, state.error ? "warning" : "muted")].slice(0, height - 1);
     const gap = Array.from({ length: height - top.length - 1 }, () => continuation(state.error ? safeDisplay(state.error) : "", "warning"));
-    return [...top, ...gap, shortcut].map((row) => fitLine(row, width));
+    return layout([...top, ...gap, shortcut], width);
   }
   const compact = height < 16;
   const heading = continuation(state.error && height < 8 ? `last result · ${count}` : `${count} changed path${count === "1" ? "" : "s"}`);
@@ -199,7 +214,7 @@ export function formatSidebar(
   const header = compact ? [title, heading] : [line(""), title,
     continuation(project.endsWith("/") ? project : `${project}/`), continuation(), heading, continuation()];
   const hasInitial = state.changes.some((change) => state.initialPaths.has(change.path));
-  const footer: SidebarLine[] = [];
+  const footer: Row[] = [];
   if (hasInitial && height >= 8) footer.push(continuation(compact || width < 26 ? "* before launch" : "* changed before launch"));
   if (state.error) {
     footer.push(continuation("△ Git unavailable", "warning"));
@@ -211,5 +226,9 @@ export function formatSidebar(
   const available = Math.max(0, height - header.length - footer.length);
   const body = changeLines(state, available, width);
   const padding = Array.from({ length: Math.max(0, available - body.length) }, () => continuation());
-  return [...header, ...body, ...padding, ...footer].slice(0, height).map((row) => fitLine(row, width));
+  return layout([...header, ...body, ...padding, ...footer].slice(0, height), width);
+}
+
+export function formatSidebar(state: ChangesState, projectName: string, rows: number, columns: number): readonly SidebarLine[] {
+  return sidebarLayout(state, projectName, rows, columns).lines;
 }

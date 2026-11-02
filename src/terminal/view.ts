@@ -1,28 +1,39 @@
-import { bold, BoxRenderable, EmbeddedTerminalRenderable, fg, KeyEvent, StyledText, TextRenderable } from "@opentui/core";
-import type { CliRenderer } from "@opentui/core";
+import { bg, bold, BoxRenderable, EmbeddedTerminalRenderable, fg, KeyEvent, StyledText, TextRenderable } from "@opentui/core";
+import type { CliRenderer, PasteEvent } from "@opentui/core";
+import type { DiffPreviewState } from "../diff-preview";
+import type { DiffSelection } from "../git/diff";
+import { mountDiffPreview } from "./preview";
 import type { CommandSpec } from "../command";
 import type { ChangesState } from "../git/status";
 import { startPty } from "./pty";
 import type { PtySession } from "./pty";
-import { formatSidebar, reduceSidebar, sidebarColumns } from "./sidebar";
-import type { SidebarState } from "./sidebar";
+import { sidebarLayout, reduceSidebar, sidebarColumns } from "./sidebar";
+import type { SidebarState, SidebarLayout } from "./sidebar";
 import { sidebarTheme } from "./theme";
 import type { SidebarTheme } from "./theme";
 
-function sidebarText(changes: ChangesState, projectName: string, rows: number, width: number, palette: SidebarTheme): StyledText {
-  const lines = formatSidebar(changes, projectName, Math.max(0, rows - 1), Math.max(0, width - 5));
-  return new StyledText(lines.flatMap((line, index) => [
-    ...(index > 0 ? [fg(palette.text)("\n")] : []),
-    ...line.map((span) => {
+function sidebarText(content: SidebarLayout, palette: SidebarTheme, active: DiffSelection | null, width: number): StyledText {
+  const activeRows = new Set(content.targets.filter(({ selection }) => active !== null && selection.path === active.path
+    && selection.comparison === active.comparison).map(({ row }) => row));
+  return new StyledText(content.lines.flatMap((line, index) => {
+    const selected = activeRows.has(index);
+    const spans = line.map((span) => {
       const chunk = fg(palette[span.tone])(span.text);
-      return span.bold ? bold(chunk) : chunk;
-    }),
-  ]));
+      const styled = span.bold || (selected && span.tone === "text") ? bold(chunk) : chunk;
+      return selected ? bg(palette.activeBackground)(styled) : styled;
+    });
+    const padding = selected ? Math.max(0, width - line.reduce((sum, span) => sum + Bun.stringWidth(span.text), 0)) : 0;
+    return [
+      ...(index > 0 ? [fg(palette.text)("\n")] : []), ...spans,
+      ...(padding ? [bg(palette.activeBackground)(" ".repeat(padding))] : []),
+    ];
+  }));
 }
 
 type MountedTerminal = Readonly<{
   exited: Promise<number>;
   setChanges: (state: ChangesState) => void;
+  setPreview: (state: DiffPreviewState) => void;
   dispose: () => Promise<void>;
 }>;
 
@@ -33,12 +44,15 @@ export function mountTerminal(
   initialChanges: ChangesState,
   projectName: string,
   themeMode: "light" | "dark" = "dark",
+  selectDiff: (selection: DiffSelection | null) => void = () => {},
 ): MountedTerminal {
   let state: SidebarState = { visible: true, lastToggleAt: null };
   let changes = initialChanges;
+  let active: DiffSelection | null = null;
   let selectedTheme = themeMode;
   let palette = sidebarTheme(selectedTheme);
   let child: PtySession | undefined;
+  let content = sidebarLayout(changes, projectName, Math.max(0, renderer.height - 1), Math.max(0, sidebarColumns(renderer.width, true) - 5));
   const layout = new BoxRenderable(renderer, {
     id: "workspace", width: "100%", height: "100%", flexDirection: "row",
   });
@@ -74,13 +88,24 @@ export function mountTerminal(
   const instructions = new TextRenderable(renderer, {
     id: "changes", width: "100%", height: Math.max(0, renderer.height - 1), flexShrink: 0, wrapMode: "none",
     fg: palette.text, bg: palette.background,
-    content: sidebarText(changes, projectName, renderer.height, sidebarColumns(renderer.width, true), palette),
+    content: sidebarText(content, palette, active, Math.max(0, sidebarColumns(renderer.width, state.visible) - 5)), selectable: false,
+    onMouseDown(event) {
+      if (event.button !== 0) return;
+      const target = content.targets.find((target) => target.row === event.y - instructions.y);
+      if (!target) return;
+      event.preventDefault(); event.stopPropagation(); selectDiff(target.selection);
+    },
   });
   sidebar.add(themeSwitch);
   sidebar.add(instructions);
   layout.add(sidebar);
   layout.add(terminal);
   renderer.root.add(layout);
+  const preview = mountDiffPreview(renderer, palette, () => selectDiff(null));
+  const refreshSidebar = () => {
+    content = sidebarLayout(changes, projectName, Math.max(0, renderer.height - 1), Math.max(0, sidebarColumns(renderer.width, state.visible) - 5));
+    instructions.content = sidebarText(content, palette, active, Math.max(0, sidebarColumns(renderer.width, state.visible) - 5));
+  };
 
   const resize = () => {
     const width = sidebarColumns(renderer.width, state.visible);
@@ -89,7 +114,8 @@ export function mountTerminal(
     terminal.width = Math.max(1, renderer.width - width);
     terminal.height = Math.max(1, renderer.height);
     instructions.height = Math.max(0, renderer.height - 1);
-    instructions.content = sidebarText(changes, projectName, renderer.height, width, palette);
+    refreshSidebar();
+    preview.resize(width, renderer.width - width, renderer.height);
     child?.resize(Math.max(1, renderer.width - width), Math.max(1, renderer.height));
   };
   const updateTheme = () => {
@@ -100,11 +126,16 @@ export function mountTerminal(
     themeSwitch.content = switchText();
     instructions.bg = palette.background;
     instructions.fg = palette.text;
-    instructions.content = sidebarText(changes, projectName, renderer.height, sidebarColumns(renderer.width, state.visible), palette);
+    refreshSidebar();
+    preview.setTheme(palette);
   };
   const ordinaryInput = () => { state = reduceSidebar(state, { type: "input" }).state; };
   const keypress = (key: KeyEvent) => {
-    if (key.name === "linefeed") {
+    if (preview.isOpen() && !(key.ctrl && key.name === "g" && !key.meta && !key.shift)) {
+      key.preventDefault(); key.stopPropagation(); ordinaryInput();
+      if (key.ctrl && key.name === "c") child?.write(terminal.encodeKey(key));
+      else preview.handleKey(key);
+    } else if (key.name === "linefeed") {
       // OpenTUI 0.8.1 parses LF but its embedded encoder has no linefeed key.
       // Encode the equivalent Ctrl+J through the child's negotiated keyboard mode.
       key.preventDefault();
@@ -129,13 +160,18 @@ export function mountTerminal(
       onData: (bytes) => terminal.write(bytes),
     });
   } catch (error: unknown) {
+    preview.dispose();
     layout.destroyRecursively();
     throw error;
   }
+  const paste = (event: PasteEvent) => {
+    ordinaryInput();
+    if (preview.isOpen()) { event.preventDefault(); event.stopPropagation(); }
+  };
   const session = child;
   renderer.on("resize", resize);
   renderer.keyInput.on("keypress", keypress);
-  renderer.keyInput.on("paste", ordinaryInput);
+  renderer.keyInput.on("paste", paste);
   resize();
   terminal.focus();
 
@@ -143,10 +179,11 @@ export function mountTerminal(
   async function shutdown(): Promise<void> {
     renderer.off("resize", resize);
     renderer.keyInput.off("keypress", keypress);
-    renderer.keyInput.off("paste", ordinaryInput);
+    renderer.keyInput.off("paste", paste);
     try {
       await session.dispose();
     } finally {
+      preview.dispose();
       layout.destroyRecursively();
     }
   }
@@ -155,7 +192,14 @@ export function mountTerminal(
     setChanges(nextState) {
       if (disposal) return;
       changes = nextState;
-      instructions.content = sidebarText(changes, projectName, renderer.height, sidebarColumns(renderer.width, state.visible), palette);
+      refreshSidebar();
+    },
+    setPreview(next) {
+      if (disposal) return;
+      active = next.kind === "closed" ? null : next.selection;
+      refreshSidebar();
+      preview.setState(next);
+      if (next.kind === "closed") terminal.focus();
     },
     dispose: () => disposal ??= shutdown(),
   };

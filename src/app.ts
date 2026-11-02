@@ -4,6 +4,8 @@ import type { CommandSpec } from "./command";
 import { loadGitProject } from "./git/client";
 import { pollGitStatus } from "./git/polling";
 import { applyStatus, createChangesState } from "./git/status";
+import { createDiffPreview } from "./diff-preview";
+import { readGitDiff } from "./git/diff";
 import { mountTerminal } from "./terminal/view";
 
 export type AppResult =
@@ -22,6 +24,10 @@ export async function runApp(command: CommandSpec, cwd: string): Promise<AppResu
   let polling: ReturnType<typeof pollGitStatus> | undefined;
   let signalCode: number | undefined;
   const failure = Promise.withResolvers<never>();
+  const preview = createDiffPreview(
+    (selection, signal) => readGitDiff(project.root, selection, signal),
+    (next) => session?.setPreview(next), failure.reject,
+  );
   const stop = (code: number) => {
     signalCode ??= code;
     if (session) void session.dispose().catch(failure.reject);
@@ -38,7 +44,7 @@ export async function runApp(command: CommandSpec, cwd: string): Promise<AppResu
   try {
     const requestedTheme = process.env.PORCLAINTREE_THEME;
     const themeMode = requestedTheme === "light" ? "light" : "dark";
-    const mounted = mountTerminal(renderer, command, cwd, state, basename(project.root) || project.root, themeMode);
+    const mounted = mountTerminal(renderer, command, cwd, state, basename(project.root) || project.root, themeMode, preview.select);
     session = mounted;
     polling = pollGitStatus(project.root, (result) => {
       state = applyStatus(state, result);
@@ -52,7 +58,7 @@ export async function runApp(command: CommandSpec, cwd: string): Promise<AppResu
       try {
         await polling?.stop();
       } finally {
-        await session?.dispose();
+        try { await preview.stop(); } finally { await session?.dispose(); }
       }
     } finally {
       renderer.destroy();

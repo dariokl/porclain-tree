@@ -1,6 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { createTestRenderer } from "@opentui/core/testing";
+import { EmbeddedTerminalRenderable } from "@opentui/core";
 import { runApp } from "../src/app";
 import { startPty } from "../src/terminal/pty";
 
@@ -71,4 +73,38 @@ test("application handles external termination and releases its terminal", async
   } finally {
     await session.dispose();
   }
+});
+
+
+test("actual CLI loads an untracked diff and returns input to its running child", async () => {
+  const root = await directory(true);
+  await writeFile(join(root, "preview.txt"), "actual-diff-content\n");
+  const setup = await createTestRenderer({ width: 120, height: 30, exitOnCtrlC: false });
+  let child: ReturnType<typeof startPty> | undefined;
+  const host = new EmbeddedTerminalRenderable(setup.renderer, { width: 120, height: 30 });
+  setup.renderer.root.add(host);
+  const cli = new URL("../src/cli.ts", import.meta.url).pathname;
+  child = startPty({ executable: process.execPath, args: [cli, "--", "sh", "-c", "stty -echo; echo APP_READY; read -r line; exit 7"] }, {
+    cwd: root, cols: 120, rows: 30, onData: (bytes) => host.write(bytes),
+  });
+  async function frame(marker: string) {
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline) {
+      await setup.renderOnce();
+      if (setup.captureCharFrame().includes(marker)) return;
+      await Bun.sleep(10);
+    }
+    throw new Error(`Missing ${marker} in actual CLI: ${setup.captureCharFrame()}`);
+  }
+  try {
+    await frame("APP_READY");
+    const row = setup.captureCharFrame().split("\n").findIndex((row) => row.includes("preview.txt"));
+    child.write(`\x1b[<0;11;${row + 1}M\x1b[<0;11;${row + 1}m`);
+    await frame("+actual-diff-content");
+    expect(setup.captureCharFrame()).toContain("Untracked · file vs empty");
+    child.write("q");
+    await frame("APP_READY");
+    child.write("done\r");
+    expect(await child.exited).toBe(7);
+  } finally { await child.dispose(); await setup.dispose(); }
 });

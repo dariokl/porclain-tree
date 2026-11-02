@@ -28,6 +28,8 @@ Start inside a Git working tree, including any subfolder. If the initial Git rea
 - **Ctrl+G:** hide/show the sidebar.
 - **Ctrl+G twice within 300 ms:** restore the previous sidebar state and send one literal Ctrl+G to the child.
 - Below 100 terminal columns, the sidebar automatically collapses; widening restores your selected visibility.
+- **Click a changed filename or its directory row:** open a read-only diff snapshot. The selected entry stays highlighted until you close the preview.
+- **In the preview:** arrows scroll vertically/horizontally; Page Up/Down and Home/End move through the diff. **Esc**, **q**, or **Close** returns to the CLI. Typing and paste stay out of the child while the preview is open; **Ctrl+C** still reaches it.
 - Exit using your command's normal controls. PorclainTree returns its exit code.
 
 ## Git sidebar
@@ -50,6 +52,12 @@ Changes are grouped into unstaged, staged, untracked, and conflicted entries. A 
 - Untracked folders may appear as a single entry. Ignored untracked files stay excluded.
 - Long names and paths show `…`. An overflow count reports entries that do not fit vertically.
 - A failed refresh labels the last successful list as stale. The child stays usable, and a successful refresh clears the warning.
+
+## Diff preview
+
+The preview covers the right pane while your command keeps running underneath. It labels the selected comparison: staged changes against HEAD, unstaged changes against the index, untracked files against empty content, or a combined conflict diff. Click another entry to load a new snapshot; the displayed diff does not refresh automatically.
+
+Previews never stage or edit files. Binary files show Git's summary; directory summaries cannot be expanded, and renames into or out of their own former directory path require direct Git inspection. Reads are limited to two seconds, 1 MiB, and 10,000 lines. Unsupported encoding or an unavailable file shows an explanation. Control characters are displayed as escaped text, tabs as four spaces, and long lines can be scrolled horizontally. Preview colors follow the sidebar switch without changing the child CLI's theme.
 
 ## Development
 

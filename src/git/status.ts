@@ -15,7 +15,7 @@ export type ChangesState = Readonly<{
   error: string | null;
 }>;
 
-function validPath(path: string): boolean {
+export function isGitPath(path: string): boolean {
   return path.length > 0 && !path.startsWith("/")
     && !path.split("/").some((part) => part === ".." || part === ".");
 }
@@ -41,10 +41,10 @@ export function parseStatus(bytes: Uint8Array): GitStatusResult {
     if (!" MADRCUT?!".includes(indexStatus) || !" MADRCUT?!".includes(worktreeStatus)
       || pair === "  " || (/[?!]/.test(pair) && pair !== "??" && pair !== "!!")) return invalid;
     const path = record.slice(3);
-    if (!validPath(path)) return invalid;
+    if (!isGitPath(path)) return invalid;
     if (/[RC]/.test(pair)) {
       const previousPath = records[++i];
-      if (!previousPath || !validPath(previousPath)) return invalid;
+      if (!previousPath || !isGitPath(previousPath)) return invalid;
       changes.push({ path, previousPath, indexStatus, worktreeStatus });
     } else {
       changes.push({ path, indexStatus, worktreeStatus });

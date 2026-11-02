@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { formatSidebar, reduceSidebar, sidebarColumns } from "../../src/terminal/sidebar";
+import { formatSidebar, sidebarLayout, reduceSidebar, sidebarColumns } from "../../src/terminal/sidebar";
 import { applyStatus, createChangesState } from "../../src/git/status";
 
 describe("sidebar controls", () => {
@@ -48,6 +48,21 @@ const plain = (state: ReturnType<typeof createChangesState>, rows = 30, columns 
 describe("sidebar presentation", () => {
   const oldChange = Object.freeze({ path: "old.ts", indexStatus: " ", worktreeStatus: "M" });
   const newChange = Object.freeze({ path: "new.ts", indexStatus: "?", worktreeStatus: "?" });
+
+  test("visible filename and directory rows retain exact comparison targets through clipping", () => {
+    const layout = sidebarLayout(createChangesState([
+      { path: "long-directory/both.ts", indexStatus: "M", worktreeStatus: "M" },
+    ]), "fixture", 30, 23);
+    for (const comparison of ["staged", "unstaged"]) {
+      const rows = layout.targets.filter((target) => target.selection.comparison === comparison);
+      expect(rows).toHaveLength(2);
+      expect(rows.every((target) => target.selection.path === "long-directory/both.ts")).toBe(true);
+      expect(rows.some((target) => layout.lines[target.row]?.some((span) => span.text.includes("both.ts")))).toBe(true);
+    }
+    const short = sidebarLayout(createChangesState(Array.from({ length: 20 }, (_, i) => ({ path: `dir/file-${i}`, indexStatus: "?", worktreeStatus: "?" }))), "fixture", 12, 23);
+    expect(short.targets.length).toBeLessThan(20);
+    expect(short.targets.every((target) => !short.lines[target.row]?.some((span) => /more entries|Ctrl\+G/.test(span.text)))).toBe(true);
+  });
 
   test("groups both sides of a partially staged file with explicit baselines", () => {
     const state = createChangesState([{ path: "src/both.ts", indexStatus: "M", worktreeStatus: "M" }]);

@@ -6,7 +6,7 @@ type GitOutputResult = Readonly<{ ok: true; output: Uint8Array }> | Readonly<{ o
 export type GitProject = Readonly<{ root: string; changes: readonly Change[] }>;
 type ProjectResult = Readonly<{ ok: true } & GitProject> | Readonly<{ ok: false; error: string }>;
 
-export function runGit(args: readonly string[], cwd: string, signal?: AbortSignal): Promise<GitOutputResult> {
+export function runGit(args: readonly string[], cwd: string, signal?: AbortSignal, successCodes: readonly number[] = [0]): Promise<GitOutputResult> {
   if (signal?.aborted) return Promise.resolve({ ok: false, error: "Git read cancelled" });
   return new Promise((resolve) => {
     const child = spawn("git", ["--no-optional-locks", "-c", "core.fsmonitor=false", ...args], {
@@ -41,7 +41,7 @@ export function runGit(args: readonly string[], cwd: string, signal?: AbortSigna
       clearTimeout(timeout);
       signal?.removeEventListener("abort", cancel);
       if (failure) resolve({ ok: false, error: failure });
-      else if (code !== 0) {
+      else if (code === null || !successCodes.includes(code) || (code !== 0 && stdout.length === 0)) {
         const message = Buffer.concat(stderr).toString("utf8").trim();
         resolve({ ok: false, error: message || `Git failed with exit code ${code}` });
       } else resolve({ ok: true, output: Buffer.concat(stdout) });

@@ -209,3 +209,116 @@ test("PORCLAINTREE_THEME forces a white sidebar in the actual CLI without a ligh
     await setup.dispose();
   }
 });
+
+test("clicking a file opens a scrollable preview without leaking typing or paste to the child", async () => {
+  const setup = await createTestRenderer({ width: 120, height: 24, exitOnCtrlC: false });
+  const selected: import("../../src/git/diff").DiffSelection[] = [];
+  const change = { path: "both.ts", indexStatus: "M", worktreeStatus: "M" };
+  const session = mountTerminal(setup.renderer, {
+    executable: process.execPath,
+    args: ["-e", 'process.stdin.setRawMode(true); process.stdout.write("raw-ready\\r\\n"); process.stdin.on("data", b => process.stdout.write("BYTES:" + b.toString("hex") + "\\r\\n"));'],
+  }, process.cwd(), createChangesState([change]), "fixture", "dark", (selection) => {
+    if (!selection) session.setPreview({ kind: "closed" });
+    else {
+      selected.push(selection);
+      session.setPreview({ kind: "ready", selection, text: Array.from({ length: 60 }, (_, i) => `+preview-line-${i}`).join("\n") + "\n+escaped\x1b[31m\n+" + " ".repeat(100) + "right-edge" });
+    }
+  });
+  try {
+    await waitForFrame(setup, "raw-ready");
+    const rows = setup.captureCharFrame().split("\n");
+    const fileRows = rows.flatMap((row, index) => row.includes("both.ts") ? [index] : []);
+    expect(fileRows).toHaveLength(2);
+    await setup.mockMouse.click(10, fileRows[1] ?? -1);
+    await waitForFrame(setup, "Staged · index vs HEAD");
+    expect(selected).toEqual([{ path: "both.ts", comparison: "staged" }]);
+    await setup.mockInput.typeText("x");
+    await setup.mockInput.pasteBracketedText("secret");
+    setup.mockInput.pressArrow("down");
+    setup.mockInput.pressKey("END");
+    await waitForFrame(setup, "preview-line-59");
+    expect(setup.captureCharFrame()).toContain("escaped\\u001b[31m");
+    for (let i = 0; i < 5; i++) setup.mockInput.pressArrow("right");
+    await waitForFrame(setup, "right-edge");
+    setup.mockInput.pressCtrlC();
+    setup.mockInput.pressKey("ESCAPE");
+    await waitForFrame(setup, "BYTES:03");
+    expect(setup.captureCharFrame()).not.toContain("BYTES:78");
+    expect(setup.captureCharFrame()).not.toContain("736563726574");
+    await setup.mockInput.typeText("y");
+    await waitForFrame(setup, "BYTES:79");
+    await setup.mockMouse.click(10, fileRows[0] ?? -1);
+    await waitForFrame(setup, "Unstaged · worktree vs index");
+    await setup.mockMouse.click(114, 0);
+    await waitForFrame(setup, "raw-ready");
+    expect(setup.captureCharFrame()).not.toContain("Diff snapshot");
+  } finally { await session.dispose(); await setup.dispose(); }
+});
+
+test("preview stays aligned through resize, theme switching, and refreshed file targets", async () => {
+  const setup = await createTestRenderer({ width: 120, height: 24, exitOnCtrlC: false });
+  const session = mountTerminal(setup.renderer, { executable: "sh", args: ["-c", "echo child-ready; read -r line"] },
+    process.cwd(), createChangesState([{ path: "old.ts", indexStatus: " ", worktreeStatus: "M" }]), "fixture", "dark", (selection) => {
+      session.setPreview(selection ? { kind: "loading", selection } : { kind: "closed" });
+    });
+  try {
+    await waitForFrame(setup, "child-ready");
+    session.setChanges(createChangesState([{ path: "dir/new.ts", indexStatus: "?", worktreeStatus: "?" }]));
+    await waitForFrame(setup, "new.ts");
+    const y = setup.captureCharFrame().split("\n").findIndex((row) => row.includes("dir/"));
+    await setup.mockMouse.click(11, y);
+    await waitForFrame(setup, "Loading diff");
+    expect(setup.captureCharFrame()).toContain("dir/new.ts");
+    await setup.mockMouse.click(8, 0);
+    await setup.renderOnce();
+    const previewSpan = setup.captureSpans().lines.flatMap((line) => line.spans).find((span) => span.text.includes("Diff snapshot"));
+    expect(previewSpan?.bg.toInts()).toEqual([255, 255, 255, 255]);
+    setup.resize(80, 16);
+    await setup.renderOnce();
+    expect(setup.captureCharFrame().split("\n")[0]?.startsWith("Diff snapshot")).toBe(true);
+    session.setPreview({ kind: "error", selection: { path: "dir/new.ts", comparison: "untracked" }, error: "File disappeared\x1b[2J" });
+    await waitForFrame(setup, "File disappeared\\u001b[2J");
+    setup.mockInput.pressKey("q");
+    await waitForFrame(setup, "child-ready");
+  } finally { await session.dispose(); await setup.dispose(); }
+});
+
+test("active file highlights only its comparison and follows preview lifetime and sidebar theme", async () => {
+  const setup = await createTestRenderer({ width: 120, height: 30, exitOnCtrlC: false });
+  const changes = createChangesState([{ path: "dir/both.ts", indexStatus: "M", worktreeStatus: "M" }]);
+  const session = mountTerminal(setup.renderer, { executable: "sh", args: ["-c", "echo child-ready; read -r line"] },
+    process.cwd(), changes, "fixture", "dark", (selection) => {
+      session.setPreview(selection ? { kind: "loading", selection } : { kind: "closed" });
+    });
+  const fileRows = () => setup.captureCharFrame().split("\n").flatMap((line, i) => line.slice(0, 28).includes("both.ts") ? [i] : []);
+  const background = (row: number) => setup.captureSpans().lines[row]?.spans.find((span) => span.text.includes("both.ts") || span.text.includes("dir/"))?.bg.toInts();
+  try {
+    await waitForFrame(setup, "child-ready");
+    const [unstaged, staged] = fileRows();
+    if (unstaged === undefined || staged === undefined) throw new Error("Missing comparisons");
+    await setup.mockMouse.click(10, staged);
+    await waitForFrame(setup, "Loading diff");
+    expect(background(staged)).toEqual([28, 28, 28, 255]);
+    expect(background(staged + 1)).toEqual([28, 28, 28, 255]);
+    expect(background(unstaged)).toEqual([0, 0, 0, 255]);
+    session.setPreview({ kind: "error", selection: { path: "dir/both.ts", comparison: "staged" }, error: "unavailable" });
+    session.setChanges(changes);
+    await setup.mockMouse.click(8, 0);
+    await setup.renderOnce();
+    expect(background(staged)).toEqual([237, 237, 237, 255]);
+    expect(background(unstaged)).toEqual([255, 255, 255, 255]);
+    await setup.mockMouse.click(10, unstaged + 1);
+    await setup.renderOnce();
+    expect(background(unstaged)).toEqual([237, 237, 237, 255]);
+    expect(background(staged)).toEqual([255, 255, 255, 255]);
+    session.setPreview({ kind: "ready", selection: { path: "dir/both.ts", comparison: "unstaged" }, text: "+content" });
+    setup.resize(110, 28);
+    await setup.renderOnce();
+    const current = fileRows()[0];
+    if (current === undefined) throw new Error("Missing resized file");
+    expect(background(current)).toEqual([237, 237, 237, 255]);
+    setup.mockInput.pressKey("q");
+    await waitForFrame(setup, "child-ready");
+    expect(background(current)).toEqual([255, 255, 255, 255]);
+  } finally { await session.dispose(); await setup.dispose(); }
+});
