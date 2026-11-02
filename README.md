@@ -99,3 +99,9 @@ The project uses TypeScript, Bun, and OpenTUI. Run the configured checks with:
 bun run typecheck
 bun test
 ```
+
+## License
+
+PorclainTree is available under the [MIT License](LICENSE).
+
+The bundled Python parser retains its [upstream MIT license](src/terminal/parsers/python/LICENSE).
