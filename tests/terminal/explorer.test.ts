@@ -51,3 +51,43 @@ test("tiny windows and stale sections stay bounded with distinct controls and di
   const stale = explorerLayout({ ...changes, error: "Git failed\x1b" }, { ...files, error: "Files failed\x1b" }, "fixture", 30, 29, createExplorerState());
   expect(text(stale)).toContain("Git failed\\u001b"); expect(text(stale)).toContain("Files failed\\u001b");
 });
+
+test("Files and Changes use compact rows with the same right-aligned Git badges", () => {
+  const value = explorerLayout(createChangesState([
+    { path: "src/app.ts", indexStatus: " ", worktreeStatus: "M" },
+  ]), { paths: ["src/app.ts"], error: null }, "fixture", 24, 29, reduceExplorer(createExplorerState(), { type: "toggle-folder", path: "src" }));
+  const targets = value.targets.filter((target) => target.selection.path === "src/app.ts");
+  expect(targets).toHaveLength(2);
+  for (const target of targets) {
+    const spans = value.lines[target.row] ?? [];
+    const row = spans.map((span) => span.text).join("");
+    expect(row).toContain("app.ts"); expect(row).toEndWith("M*");
+    expect(Bun.stringWidth(row)).toBe(29);
+    expect(spans.some((span) => span.text === "M" && span.tone === "modified")).toBe(true);
+  }
+  const headers = value.controls.filter((control) => control.action.type === "toggle-section");
+  expect(headers.every((header) => value.lines[header.row]?.some((span) => span.bold && /Files|Changes/.test(span.text)))).toBe(true);
+  expect(text(value)).not.toContain("┆");
+  expect(text(value)).toContain("Unstaged · vs index");
+});
+
+
+test("cached Git badges in Files are explicitly stale even when its file listing is current", () => {
+  const state = { ...createChangesState([{ path: "app.ts", indexStatus: " ", worktreeStatus: "M" }]), error: "Git offline" };
+  const value = explorerLayout(state, { paths: ["app.ts"], error: null }, "fixture", 25, 29, createExplorerState());
+  const header = value.sections.find((section) => section.name === "files")?.header;
+  expect(header).toBeDefined();
+  expect(value.lines[header ?? -1]?.map((span) => span.text).join("")).toContain("stale");
+});
+
+test("deep tree indentation leaves readable filenames beside combined status badges", () => {
+  const paths = ["a/b/c/d/e/f/g/important.ts", "a/b/c/d/e/f/g/different.ts"];
+  const expanded = new Set(["a", "a/b", "a/b/c", "a/b/c/d", "a/b/c/d/e", "a/b/c/d/e/f", "a/b/c/d/e/f/g"]);
+  const state = { ...createExplorerState(), expanded };
+  const changes = createChangesState(paths.map((path) => ({ path, indexStatus: "M", worktreeStatus: "M" })));
+  const value = explorerLayout(changes, { paths, error: null }, "fixture", 40, 23, state);
+  const rows = value.targets.filter((target) => target.selection.comparison === "file").map((target) => value.lines[target.row]?.map((span) => span.text).join(""));
+  expect(rows).toHaveLength(2);
+  expect(rows[0]).toContain("fferent.ts"); expect(rows[1]).toContain("portant.ts");
+  expect(rows.every((row) => row?.endsWith("MM*") && Bun.stringWidth(row) <= 23)).toBe(true);
+});

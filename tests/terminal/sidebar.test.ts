@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { changesRows, reduceSidebar, sidebarColumns } from "../../src/terminal/sidebar";
+import { changeBadge, changesRows, pathRow, reduceSidebar, sidebarColumns } from "../../src/terminal/sidebar";
 import { applyStatus, createChangesState } from "../../src/git/status";
 
 describe("sidebar controls", () => {
@@ -45,28 +45,28 @@ describe("sidebar controls", () => {
 const plain = (state: ReturnType<typeof createChangesState>, columns = 29) => changesRows(state, columns).lines.map((line) => line.map((span) => span.text).join("")).join("\n");
 
 describe("change rows", () => {
-  test("partially staged files retain exact comparison targets for both filename and directory rows", () => {
+  test("partially staged files retain exact comparison targets for both filename and inline parents", () => {
     const value = changesRows(createChangesState([{ path: "src/both.ts", indexStatus: "M", worktreeStatus: "M" }]), 23);
     for (const comparison of ["staged", "unstaged"]) {
       const targets = value.targets.filter((target) => target.selection.comparison === comparison);
-      expect(targets).toHaveLength(2);
+      expect(targets).toHaveLength(1);
       expect(targets.every((target) => target.selection.path === "src/both.ts")).toBe(true);
     }
-    expect(plain(createChangesState([{ path: "src/both.ts", indexStatus: "M", worktreeStatus: "M" }]))).toContain("├─ staged · 1\n┆  vs HEAD");
+    expect(plain(createChangesState([{ path: "src/both.ts", indexStatus: "M", worktreeStatus: "M" }]))).toContain("Staged · vs HEAD");
   });
-  test("conflicts, untracked directories and deletions keep their status and broken rail", () => {
+  test("conflicts, untracked directories and deletions keep their status in compact rows", () => {
     const value = plain(createChangesState([
       { path: "conflict.ts", indexStatus: "U", worktreeStatus: "U" },
       { path: "src/new-folder/", indexStatus: "?", worktreeStatus: "?" },
       { path: "gone.ts", indexStatus: " ", worktreeStatus: "D" },
     ]));
-    expect(value).toContain("├─ conflicts · 1"); expect(value).toContain("┆  UU* conflict.ts");
-    expect(value).toContain("new-folder/"); expect(value).toContain("src/"); expect(value).toContain("D* gone.ts");
+    expect(value).toContain("Conflicts · combined diff"); expect(value).toMatch(/conflict\.ts +UU\*/);
+    expect(value).toContain("new-folder/"); expect(value).toContain("src/"); expect(value).toMatch(/gone\.ts +D\*/);
   });
   test("launch markers stay separate from later changes without mutating inputs", () => {
     const original = Object.freeze(createChangesState([{ path: "old.ts", indexStatus: " ", worktreeStatus: "M" }]));
     const updated = applyStatus(original, { ok: true, changes: [...original.changes, { path: "new.ts", indexStatus: "?", worktreeStatus: "?" }] });
-    expect(plain(updated)).toContain("M* old.ts"); expect(plain(updated)).toContain("?  new.ts");
+    expect(plain(updated)).toMatch(/old\.ts +M\*/); expect(plain(updated)).toMatch(/new\.ts +\?\n?$/);
     expect(original.initialPaths.has("new.ts")).toBe(false); expect(original.changes).toHaveLength(1);
   });
   test("stale results retain paths and diagnostics, including a previously clean result", () => {
@@ -85,9 +85,23 @@ describe("change rows", () => {
       { path: "src/name\n\x1b.ts", indexStatus: "?", worktreeStatus: "?" },
     ]);
     const value = changesRows(state, 23);
-    expect(plain(state, 23)).toContain("UU* …onflict-name.ts");
+    expect(plain(state, 23)).toContain("…nflict-name.ts UU*");
     expect(plain(state, 23)).toContain("name\\n\\u001b.ts");
     expect(value.lines.every((line) => Bun.stringWidth(line.map((span) => span.text).join("")) <= 23)).toBe(true);
     expect(plain(state, 23)).not.toContain("\x1b");
   });
+});
+
+
+test("shared rows keep status and launch markers aligned through Unicode clipping", () => {
+  const badge = changeBadge({ path: "long.ts", indexStatus: "U", worktreeStatus: "U" }, true);
+  for (const width of [0, 1, 3, 12, 23, 29]) {
+    const spans = pathRow("👨‍👩‍👧‍👦-é-文件-very-long-name.ts", "src/terminal/", width, badge);
+    const value = spans.map((span) => span.text).join("");
+    expect(Bun.stringWidth(value)).toBeLessThanOrEqual(width);
+    if (width >= 3) expect(value).toEndWith("UU*");
+    expect(value).not.toContain("�");
+  }
+  expect(changeBadge({ path: "both.ts", indexStatus: "M", worktreeStatus: "M" }, false).status).toBe("MM");
+  expect(changeBadge({ path: "new.ts", indexStatus: "?", worktreeStatus: "?" }, false).status).toBe("?");
 });

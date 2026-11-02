@@ -2,7 +2,7 @@ import type { FileListState } from "../files/tree";
 import { fileTree } from "../files/tree";
 import type { ChangesState } from "../git/status";
 import type { PreviewSelection } from "../preview";
-import { changesRows, clip, safeDisplay } from "./sidebar";
+import { changeBadge, changesRows, clip, pathRow, safeDisplay } from "./sidebar";
 import type { SidebarLine, SidebarTone } from "./sidebar";
 
 type Section = "files" | "changes";
@@ -31,7 +31,7 @@ export function reduceExplorer(state: ExplorerState, action: ExplorerAction): Ex
   return { ...state, expanded, filesOffset: 0 };
 }
 const line = (text: string, tone: SidebarTone = "text"): SidebarLine => [{ text, tone }];
-const rail = (text = "", tone: SidebarTone = "muted"): SidebarLine => [{ text: "┆  ", tone: "border" }, { text, tone }];
+const rail = (text = "", tone: SidebarTone = "muted"): SidebarLine => [{ text: text ? "  " : "", tone: "muted" }, { text, tone }];
 function fit(spans: SidebarLine, width: number): SidebarLine {
   let remaining = width;
   const result = [];
@@ -47,26 +47,31 @@ export function explorerLayout(changes: ChangesState, files: FileListState, proj
   const width = Math.max(0, Math.floor(columns));
   const entries = fileTree(files.paths, state.expanded);
   const diagnostics = files.error ? [rail("△ Files stale", "warning"), rail(safeDisplay(files.error), "warning")] : [];
-  const fileLines = [...diagnostics, ...entries.map((entry) => rail(`${"  ".repeat(Math.min(entry.depth, Math.max(0, Math.floor((width - 8) / 2))))}${entry.kind === "directory" ? (state.expanded.has(entry.path) ? "▾ " : "▸ ") : "  "}${safeDisplay(entry.name)}`, entry.kind === "directory" ? "accent" : "text"))];
+  const badges = new Map(changes.changes.map((change) => [change.path, changeBadge(change, changes.initialPaths.has(change.path))]));
+  const fileLines = [...diagnostics, ...entries.map((entry) => {
+    const folder = entry.kind === "directory";
+    // Reserve a readable filename plus the widest Git/launch badge before nesting.
+    const indent = "  ".repeat(Math.min(entry.depth, Math.max(0, Math.floor((width - 18) / 2))));
+    const prefix = folder ? `  ${indent}${state.expanded.has(entry.path) ? "▾" : "▸"} ` : `    ${indent}`;
+    return pathRow(entry.name, "", width, folder ? undefined : badges.get(entry.path), prefix, folder ? "accent" : "text");
+  })];
   if (!fileLines.length) fileLines.push(rail("No project files"));
   const changeContent = changesRows(changes, width);
   const lines: SidebarLine[] = [];
   const targets: { row: number; selection: PreviewSelection }[] = [];
   const controls: { row: number; action: ExplorerAction }[] = [];
   const sections: { name: Section; header: number; top: number; height: number; total: number; offset: number }[] = [];
-  const branded = height >= 7;
-  if (branded) lines.push(line("╭─ porclain/tree", "accent"), rail(safeDisplay(projectName) + "/"));
+  if (height >= 7) lines.push(line(safeDisplay(projectName), "muted"));
   const hasInitial = changes.changes.some((change) => changes.initialPaths.has(change.path));
-  const footer = height >= 3 ? [
-    ...(hasInitial && height >= 9 ? [rail(width < 26 ? "* before launch" : "* changed before launch")] : []),
-    line("╰─ Ctrl+G  hide sidebar", "muted"),
-  ] : [];
-  const space = Math.max(0, height - lines.length - footer.length - 2);
+  const footer = hasInitial && height >= 8 ? [rail("* before launch")] : [];
+  const separator = height >= 8 ? 1 : 0;
+  const space = Math.max(0, height - lines.length - footer.length - 2 - separator);
   let filesHeight = state.filesOpen ? Math.min(fileLines.length, state.changesOpen ? Math.round(space * 0.6) : space) : 0;
   let changesHeight = state.changesOpen ? Math.min(changeContent.lines.length, space - filesHeight) : 0;
   filesHeight = state.filesOpen ? Math.min(fileLines.length, space - changesHeight) : 0;
   changesHeight = state.changesOpen ? Math.min(changeContent.lines.length, space - filesHeight) : 0;
   for (const name of ["files", "changes"] as const) {
+    if (name === "changes" && separator) lines.push(line(""));
     if (lines.length >= height - footer.length) break;
     const open = name === "files" ? state.filesOpen : state.changesOpen;
     const content = name === "files" ? fileLines : changeContent.lines;
@@ -74,9 +79,13 @@ export function explorerLayout(changes: ChangesState, files: FileListState, proj
     const offset = Math.min(Math.max(0, content.length - size), name === "files" ? state.filesOffset : state.changesOffset);
     const header = lines.length;
     const count = name === "files" ? files.paths.length : new Set(changes.changes.map((change) => change.path)).size;
-    const stale = (name === "files" ? files.error : changes.error) ? " · stale" : "";
+    const stale = (name === "files" ? files.error || changes.error : changes.error) ? " · stale" : "";
     const range = open && size && content.length > size ? ` · ${offset + 1}–${offset + size}/${content.length}` : "";
-    lines.push(line(`${open ? "▾" : "▸"} ${name === "files" ? "Files" : "Changes"} · ${count}${stale}${range}`, "accent"));
+    const label = `${open ? "▾" : "▸"} ${name === "files" ? "Files" : "Changes"}`;
+    const countText = String(count);
+    const left = fit([{ text: label, tone: "text", bold: true }, { text: stale, tone: "warning" }, { text: range, tone: "muted" }], Math.max(0, width - countText.length - 1));
+    const used = left.reduce((sum, span) => sum + Bun.stringWidth(span.text), 0);
+    lines.push([...left, { text: " ".repeat(Math.max(0, width - used - countText.length)) + countText, tone: "muted" }]);
     controls.push({ row: header, action: { type: "toggle-section", section: name } });
     const top = lines.length;
     sections.push({ name, header, top, height: size, total: content.length, offset });

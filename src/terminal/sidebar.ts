@@ -71,7 +71,7 @@ function layout(rows: readonly Row[], columns: number): SidebarLayout {
 }
 
 function continuation(text = "", tone: SidebarTone = "muted"): Row {
-  return row([{ text: text ? "┆  " : "┆", tone: "border" }, { text, tone }]);
+  return row([{ text: "  ", tone: "border" }, { text, tone }]);
 }
 
 function fitLine(spans: SidebarLine, columns: number): SidebarLine {
@@ -104,35 +104,56 @@ function groupChanges(changes: readonly Change[]): readonly Group[] {
     }
   }
   return [
-    { title: "Conflicts", detail: "unmerged paths", entries: conflicts },
+    { title: "Conflicts", detail: "combined diff", entries: conflicts },
     { title: "Unstaged", detail: "vs index", entries: unstaged },
     { title: "Staged", detail: "vs HEAD", entries: staged },
-    { title: "Untracked", detail: "outside the index", entries: untracked },
+    { title: "Untracked", detail: "vs empty", entries: untracked },
   ].filter((group) => group.entries.length > 0);
+}
+
+export type PathBadge = Readonly<{ status: string; tone: SidebarTone; initial: boolean }>;
+
+function statusTone(status: string): SidebarTone {
+  if (status.includes("U") || status === "AA" || status === "DD") return "warning";
+  if (status.includes("D")) return "deleted";
+  if (status === "?" || status === "A") return "added";
+  if (/[RC]/.test(status)) return "accent";
+  return "modified";
+}
+
+export function changeBadge(change: Change, initial: boolean): PathBadge {
+  const pair = change.indexStatus + change.worktreeStatus;
+  const status = pair === "??" ? "?" : pair.trim();
+  return { status, tone: statusTone(status), initial };
+}
+
+export function pathRow(name: string, directory: string, columns: number, badge?: PathBadge, prefix = "    ", tone: SidebarTone = "text"): SidebarLine {
+  const width = Math.max(0, columns);
+  const badgeWidth = badge ? Bun.stringWidth(badge.status) + (badge.initial ? 1 : 0) : 0;
+  const contentWidth = Math.max(0, width - badgeWidth - (badge ? 1 : 0));
+  const leading = clip(prefix, contentWidth);
+  const filename = clip(safeDisplay(name), Math.max(0, contentWidth - Bun.stringWidth(leading)), "end");
+  const spans = [{ text: leading, tone: "muted" as const }, { text: filename, tone }];
+  let used = Bun.stringWidth(leading + filename);
+  if (directory && contentWidth - used >= 4) {
+    const parent = " " + clip(safeDisplay(directory), contentWidth - used - 1, "end");
+    spans.push({ text: parent, tone: "muted" }); used += Bun.stringWidth(parent);
+  }
+  if (badge) {
+    spans.push({ text: " ".repeat(Math.max(0, width - used - badgeWidth)), tone: "muted" });
+    spans.push({ text: clip(badge.status, width), tone: badge.tone });
+    if (badge.initial && width > Bun.stringWidth(badge.status)) spans.push({ text: "*", tone: "muted" });
+  }
+  return spans;
 }
 
 function entryLines(entry: Entry, initialPaths: ReadonlySet<string>, columns: number): readonly Row[] {
   const { change, status } = entry;
   const separator = parentSeparator(change.path);
-  const name = safeDisplay(change.path.slice(separator + 1));
-  const directory = safeDisplay(change.path.slice(0, separator + 1));
-  const prefixWidth = 3 + status.length + 2;
-  const filename = clip(name, Math.max(0, columns - prefixWidth), "end");
-  const tone: SidebarTone = status.length > 1 ? "warning" : status === "D" ? "deleted"
-    : status === "?" || status === "A" ? "added" : status === "R" || status === "C" ? "accent" : "modified";
   const selection: DiffSelection = { path: change.path, comparison: entry.comparison,
     ...(change.previousPath === undefined ? {} : { previousPath: change.previousPath }) };
-  const rows: Row[] = [row([
-    { text: "┆  ", tone: "border" },
-    { text: status, tone },
-    { text: initialPaths.has(change.path) ? "* " : "  ", tone: "muted" },
-    { text: filename, tone: "text" },
-  ], selection)];
-  if (directory) rows.push(row([
-    { text: "┆" + " ".repeat(prefixWidth - 1), tone: "border" },
-    { text: clip(directory, Math.max(0, columns - prefixWidth), "end"), tone: "muted" },
-  ], selection));
-  return rows;
+  return [row(pathRow(change.path.slice(separator + 1), change.path.slice(0, separator + 1), columns,
+    { status, tone: statusTone(status), initial: initialPaths.has(change.path) }), selection)];
 }
 
 function parentSeparator(path: string): number {
@@ -144,8 +165,7 @@ function changeLines(state: ChangesState, columns: number): readonly Row[] {
     : [continuation("Working tree clean", "text"), continuation("Changes will appear here.")];
   return groupChanges(state.changes).flatMap((group, index) => [
     ...(index ? [continuation()] : []),
-    row([{ text: "├─ ", tone: "accent" }, { text: `${group.title.toLowerCase()} · ${group.entries.length}`, tone: "accent" }]),
-    continuation(group.detail),
+    row([{ text: `  ${group.title} · ${group.detail}`, tone: "muted" }]),
     ...group.entries.flatMap((entry) => entryLines(entry, state.initialPaths, columns)),
   ]);
 }

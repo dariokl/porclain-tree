@@ -117,8 +117,16 @@ export function mountTerminal(
       refreshSidebar();
     },
   });
-  sidebar.add(themeSwitch);
-  sidebar.add(instructions);
+  const footer = new BoxRenderable(renderer, {
+    id: "sidebar-footer", width: "100%", height: 1, flexShrink: 0,
+    flexDirection: "row", justifyContent: "space-between", backgroundColor: palette.background,
+  });
+  const shortcut = new TextRenderable(renderer, {
+    id: "sidebar-shortcut", width: 6, height: 1, selectable: false,
+    content: "Ctrl+G", fg: palette.muted, bg: palette.background,
+  });
+  footer.add(shortcut); footer.add(themeSwitch);
+  sidebar.add(instructions); sidebar.add(footer);
   layout.add(sidebar);
   layout.add(terminal);
   renderer.root.add(layout);
@@ -143,6 +151,8 @@ export function mountTerminal(
     palette = sidebarTheme(selectedTheme);
     sidebar.backgroundColor = palette.background;
     sidebar.borderColor = palette.border;
+    footer.backgroundColor = palette.background;
+    shortcut.bg = palette.background; shortcut.fg = palette.muted;
     themeSwitch.bg = palette.background;
     themeSwitch.content = switchText();
     instructions.bg = palette.background;

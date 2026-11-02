@@ -17,6 +17,13 @@ async function waitForFrame(setup: Awaited<ReturnType<typeof createTestRenderer>
   throw new Error(`Missing ${JSON.stringify(text)} in frame:\n${setup.captureCharFrame()}`);
 }
 
+async function clickTheme(setup: Awaited<ReturnType<typeof createTestRenderer>>, button: 0 | 2 = 0) {
+  const rows = setup.captureCharFrame().split("\n");
+  const y = rows.findIndex((row) => row.includes("Dark ["));
+  const x = (rows[y]?.indexOf("[") ?? -2) + 1;
+  await setup.mockMouse.click(x, y, button);
+}
+
 test("sidebar toggle and narrow-terminal collapse resize the actual child", async () => {
   const setup = await createTestRenderer({ width: 120, height: 30, exitOnCtrlC: false });
   const session = mountTerminal(setup.renderer, {
@@ -96,9 +103,10 @@ test("Git status updates on the left while errors leave child input usable", asy
   };
   try {
     await waitForFrame(setup, "old.ts");
-    const brandRow = setup.captureCharFrame().split("\n").find((row) => row.includes("porclain/tree"));
-    expect(brandRow).toBeDefined();
-    expect(brandRow?.indexOf("porclain/tree")).toBeLessThan(34);
+    const projectRow = setup.captureCharFrame().split("\n").find((row) => row.includes("fixture"));
+    expect(projectRow).toBeDefined();
+    expect(projectRow?.indexOf("fixture")).toBeLessThan(34);
+    expect(setup.captureCharFrame()).not.toContain("porclain/tree");
     updateStatus({ ok: true, changes: [oldChange, { path: "new.ts", indexStatus: "?", worktreeStatus: "?" }] });
     await waitForFrame(setup, "new.ts");
     updateStatus({ ok: false, error: "Git timed out" });
@@ -125,10 +133,11 @@ test("native sidebar distinguishes filenames from paths and keeps its footer aft
   try {
     await waitForFrame(setup, "CHILD_READY");
     expect(setup.captureCharFrame()).toContain("project-name");
-    expect(setup.captureCharFrame()).toContain("├─ unstaged · 1");
-    expect(setup.captureCharFrame()).toContain("┆  vs index");
+    expect(setup.captureCharFrame()).toContain("Unstaged · vs index");
+    expect(setup.captureCharFrame()).toContain("vs index");
     const fileRow = setup.captureCharFrame().split("\n").find((row) => row.includes("view.ts"));
-    expect(fileRow).toContain("┆  M* view.ts");
+    expect(fileRow).toContain("view.ts");
+    expect(fileRow?.slice(0, 34)).toContain("M*");
     const spans = setup.captureSpans().lines.flatMap((line) => line.spans);
     const filename = spans.find((span) => span.text.includes("view.ts"));
     const directory = spans.find((span) => span.text.includes("src/terminal/"));
@@ -138,7 +147,7 @@ test("native sidebar distinguishes filenames from paths and keeps its footer aft
     expect(child).toBeDefined();
     expect(filename?.fg.equals(directory?.fg)).toBe(false);
     expect(filename?.bg.toInts()).toEqual([0, 0, 0, 255]);
-    expect(setup.captureCharFrame().split("\n")[29]?.slice(0, 34)).toContain("╰─ Ctrl+G");
+    expect(setup.captureCharFrame().split("\n")[29]?.slice(0, 34)).toContain("Ctrl+G");
     setup.resize(110, 18);
     await setup.renderOnce();
     expect(setup.captureCharFrame().split("\n")[17]?.slice(0, 28)).toContain("Ctrl+G");
@@ -148,7 +157,7 @@ test("native sidebar distinguishes filenames from paths and keeps its footer aft
     expect(setup.captureCharFrame()).not.toContain("changed before launch");
     setup.mockInput.pressKey("g", { ctrl: true });
     await setup.renderOnce();
-    expect(setup.captureCharFrame()).not.toContain("porclain/tree");
+    expect(setup.captureCharFrame()).not.toContain("project-name");
   } finally {
     await session.dispose();
     await setup.dispose();
@@ -169,7 +178,7 @@ test("clicking the sidebar switch changes light/dark without altering child colo
     expect(setup.captureCharFrame()).toContain("Dark [●──] Light");
     const child = colors("DEFAULT");
     const panel = colors("CHILD_PANEL");
-    await setup.mockMouse.click(9, 0);
+    await clickTheme(setup);
     await setup.renderOnce();
     expect(setup.captureCharFrame()).toContain("Dark [──●] Light");
     expect(colors("view.ts").bg).toEqual([255, 255, 255, 255]);
@@ -178,10 +187,10 @@ test("clicking the sidebar switch changes light/dark without altering child colo
     await setup.mockInput.typeText("still-working");
     setup.mockInput.pressEnter();
     await waitForFrame(setup, "reply:still-working");
-    await setup.mockMouse.click(9, 0, 2);
+    await clickTheme(setup, 2);
     await setup.renderOnce();
     expect(colors("view.ts").bg).toEqual([255, 255, 255, 255]);
-    await setup.mockMouse.click(9, 0);
+    await clickTheme(setup);
     await setup.renderOnce();
     expect(colors("view.ts").bg).toEqual([0, 0, 0, 255]);
     expect(colors("CHILD_PANEL")).toEqual(panel);
@@ -202,7 +211,7 @@ test("PORCLAINTREE_THEME forces a white sidebar in the actual CLI without a ligh
   try {
     await waitForFrame(setup, "CHILD_READY");
     const spans = setup.captureSpans().lines.flatMap((line) => line.spans);
-    expect(spans.find((span) => span.text.includes("porclain"))?.bg.toInts()).toEqual([255, 255, 255, 255]);
+    expect(spans.find((span) => span.text.includes("porcelain"))?.bg.toInts()).toEqual([255, 255, 255, 255]);
     expect(spans.find((span) => span.text.includes("CHILD_READY"))?.bg.toInts()).toEqual([0, 0, 0, 255]);
   } finally {
     await child.dispose();
@@ -269,7 +278,7 @@ test("preview stays aligned through resize, theme switching, and refreshed file 
     await setup.mockMouse.click(11, y);
     await waitForFrame(setup, "Loading diff");
     expect(setup.captureCharFrame()).toContain("dir/new.ts");
-    await setup.mockMouse.click(8, 0);
+    await clickTheme(setup);
     await setup.renderOnce();
     const previewSpan = setup.captureSpans().lines.flatMap((line) => line.spans).find((span) => span.text.includes("Diff snapshot"));
     expect(previewSpan?.bg.toInts()).toEqual([255, 255, 255, 255]);
@@ -299,15 +308,14 @@ test("active file highlights only its comparison and follows preview lifetime an
     await setup.mockMouse.click(10, staged);
     await waitForFrame(setup, "Loading diff");
     expect(background(staged)).toEqual([28, 28, 28, 255]);
-    expect(background(staged + 1)).toEqual([28, 28, 28, 255]);
     expect(background(unstaged)).toEqual([0, 0, 0, 255]);
     session.setPreview({ kind: "error", selection: { path: "dir/both.ts", comparison: "staged" }, error: "unavailable" });
     session.setChanges(changes);
-    await setup.mockMouse.click(8, 0);
+    await clickTheme(setup);
     await setup.renderOnce();
     expect(background(staged)).toEqual([237, 237, 237, 255]);
     expect(background(unstaged)).toEqual([255, 255, 255, 255]);
-    await setup.mockMouse.click(10, unstaged + 1);
+    await setup.mockMouse.click(10, unstaged);
     await setup.renderOnce();
     expect(background(unstaged)).toEqual([237, 237, 237, 255]);
     expect(background(staged)).toEqual([255, 255, 255, 255]);
@@ -400,5 +408,25 @@ test("collapsing another section preserves scroll position and scrolling uses th
     const expandedOffset = Number(firstFile());
     await setup.mockMouse.scroll(12, row("▾ Files") + 1, "up"); await setup.renderOnce();
     expect(Number(firstFile())).toBe(expandedOffset - 3);
+  } finally { await session.dispose(); await setup.dispose(); }
+});
+
+test("compact controls live in the footer and the theme switch stays clickable there", async () => {
+  const setup = await createTestRenderer({ width: 120, height: 24, exitOnCtrlC: false });
+  const session = mountTerminal(setup.renderer, { executable: "sh", args: ["-c", "echo child-ready; read -r line"] },
+    process.cwd(), createChangesState([{ path: "app.ts", indexStatus: " ", worktreeStatus: "M" }]), "fixture");
+  try {
+    await waitForFrame(setup, "child-ready");
+    let rows = setup.captureCharFrame().split("\n");
+    expect(rows[0]?.slice(0, 33).trim()).toBe("fixture");
+    expect(setup.captureCharFrame()).not.toContain("porclain/tree");
+    expect(rows[23]?.slice(0, 34)).toContain("Ctrl+G");
+    expect(rows[23]?.slice(0, 34)).toContain("Dark [●──] Light");
+    const x = (rows[23]?.indexOf("[●") ?? -2) + 1;
+    await setup.mockMouse.click(x, 23); await setup.renderOnce();
+    rows = setup.captureCharFrame().split("\n");
+    expect(rows[23]).toContain("Dark [──●] Light");
+    const span = setup.captureSpans().lines.flatMap((line) => line.spans).find((span) => span.text.includes("app.ts"));
+    expect(span?.bg.toInts()).toEqual([255, 255, 255, 255]);
   } finally { await session.dispose(); await setup.dispose(); }
 });
