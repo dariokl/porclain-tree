@@ -1,5 +1,5 @@
 import type { FileListState } from "../files/tree";
-import { fileTree } from "../files/tree";
+import { fileTree, searchFilePaths } from "../files/tree";
 import type { ChangesState } from "../git/status";
 import type { PreviewSelection } from "../preview";
 import { changeBadge, changesRows, clip, pathRow, safeDisplay } from "./sidebar";
@@ -8,21 +8,24 @@ import type { SidebarLine, SidebarTone } from "./sidebar";
 type Section = "files" | "changes";
 export type ExplorerState = Readonly<{
   filesOpen: boolean; changesOpen: boolean; expanded: ReadonlySet<string>;
-  filesOffset: number; changesOffset: number;
+  filesOffset: number; changesOffset: number; query: string;
 }>;
 export type ExplorerAction = Readonly<{ type: "toggle-section"; section: Section }>
   | Readonly<{ type: "toggle-folder"; path: string }>
+  | Readonly<{ type: "search"; query: string }>
   | Readonly<{ type: "scroll"; section: Section; delta: number }>;
 export type ExplorerLayout = Readonly<{
+  searchRow: number | null;
   lines: readonly SidebarLine[];
   targets: readonly Readonly<{ row: number; selection: PreviewSelection }>[];
   controls: readonly Readonly<{ row: number; action: ExplorerAction }>[];
   sections: readonly Readonly<{ name: Section; header: number; top: number; height: number; total: number; offset: number }>[];
 }>;
 export function createExplorerState(): ExplorerState {
-  return { filesOpen: true, changesOpen: true, expanded: new Set(), filesOffset: 0, changesOffset: 0 };
+  return { filesOpen: true, changesOpen: true, expanded: new Set(), filesOffset: 0, changesOffset: 0, query: "" };
 }
 export function reduceExplorer(state: ExplorerState, action: ExplorerAction): ExplorerState {
+  if (action.type === "search") return { ...state, query: action.query, filesOffset: 0, filesOpen: true };
   if (action.type === "toggle-section") return action.section === "files" ? { ...state, filesOpen: !state.filesOpen } : { ...state, changesOpen: !state.changesOpen };
   if (action.type === "scroll") return action.section === "files" ? { ...state, filesOffset: Math.max(0, state.filesOffset + action.delta) }
     : { ...state, changesOffset: Math.max(0, state.changesOffset + action.delta) };
@@ -45,7 +48,10 @@ function fit(spans: SidebarLine, width: number): SidebarLine {
 export function explorerLayout(changes: ChangesState, files: FileListState, projectName: string, rows: number, columns: number, state: ExplorerState): ExplorerLayout {
   const height = Math.max(0, Math.floor(rows));
   const width = Math.max(0, Math.floor(columns));
-  const entries = fileTree(files.paths, state.expanded);
+  const searching = state.query.trim().length > 0;
+  const matches = searching ? searchFilePaths(files.paths, state.query) : files.paths;
+  const entries = searching ? matches.map((path) => ({ path, name: path.slice(path.lastIndexOf("/") + 1), kind: "file" as const, depth: 0 }))
+    : fileTree(files.paths, state.expanded);
   const diagnostics = files.error ? [rail("△ Files stale", "warning"), rail(safeDisplay(files.error), "warning")] : [];
   const badges = new Map(changes.changes.map((change) => [change.path, changeBadge(change, changes.initialPaths.has(change.path))]));
   const fileLines = [...diagnostics, ...entries.map((entry) => {
@@ -53,19 +59,20 @@ export function explorerLayout(changes: ChangesState, files: FileListState, proj
     // Reserve a readable filename plus the widest Git/launch badge before nesting.
     const indent = "  ".repeat(Math.min(entry.depth, Math.max(0, Math.floor((width - 18) / 2))));
     const prefix = folder ? `  ${indent}${state.expanded.has(entry.path) ? "▾" : "▸"} ` : `    ${indent}`;
-    return pathRow(entry.name, "", width, folder ? undefined : badges.get(entry.path), prefix, folder ? "accent" : "text");
+    return pathRow(entry.name, searching ? entry.path.slice(0, entry.path.lastIndexOf("/") + 1) : "", width, folder ? undefined : badges.get(entry.path), prefix, folder ? "accent" : "text");
   })];
-  if (!fileLines.length) fileLines.push(rail("No project files"));
+  if (!fileLines.length) fileLines.push(rail(searching ? "No matching files" : "No project files"));
   const changeContent = changesRows(changes, width);
   const lines: SidebarLine[] = [];
   const targets: { row: number; selection: PreviewSelection }[] = [];
   const controls: { row: number; action: ExplorerAction }[] = [];
   const sections: { name: Section; header: number; top: number; height: number; total: number; offset: number }[] = [];
+  let searchRow: number | null = null;
   if (height >= 7) lines.push(line(safeDisplay(projectName), "muted"));
   const hasInitial = changes.changes.some((change) => changes.initialPaths.has(change.path));
   const footer = hasInitial && height >= 8 ? [rail("* before launch")] : [];
   const separator = height >= 8 ? 1 : 0;
-  const space = Math.max(0, height - lines.length - footer.length - 2 - separator);
+  const space = Math.max(0, height - lines.length - footer.length - 2 - separator - (state.filesOpen ? 1 : 0));
   let filesHeight = state.filesOpen ? Math.min(fileLines.length, state.changesOpen ? Math.round(space * 0.6) : space) : 0;
   let changesHeight = state.changesOpen ? Math.min(changeContent.lines.length, space - filesHeight) : 0;
   filesHeight = state.filesOpen ? Math.min(fileLines.length, space - changesHeight) : 0;
@@ -82,11 +89,15 @@ export function explorerLayout(changes: ChangesState, files: FileListState, proj
     const stale = (name === "files" ? files.error || changes.error : changes.error) ? " · stale" : "";
     const range = open && size && content.length > size ? ` · ${offset + 1}–${offset + size}/${content.length}` : "";
     const label = `${open ? "▾" : "▸"} ${name === "files" ? "Files" : "Changes"}`;
-    const countText = String(count);
+    const countText = name === "files" && searching ? `${matches.length}/${count}` : String(count);
     const left = fit([{ text: label, tone: "text", bold: true }, { text: stale, tone: "warning" }, { text: range, tone: "muted" }], Math.max(0, width - countText.length - 1));
     const used = left.reduce((sum, span) => sum + Bun.stringWidth(span.text), 0);
     lines.push([...left, { text: " ".repeat(Math.max(0, width - used - countText.length)) + countText, tone: "muted" }]);
     controls.push({ row: header, action: { type: "toggle-section", section: name } });
+    if (name === "files" && open && lines.length < height - footer.length - 1) {
+      searchRow = lines.length;
+      lines.push(line(""));
+    }
     const top = lines.length;
     sections.push({ name, header, top, height: size, total: content.length, offset });
     for (let index = offset; index < offset + size; index++) {
@@ -105,5 +116,5 @@ export function explorerLayout(changes: ChangesState, files: FileListState, proj
   }
   while (lines.length < height - footer.length) lines.push(rail());
   lines.push(...footer);
-  return { lines: lines.slice(0, height).map((spans) => fit(spans, width)), targets, controls, sections };
+  return { searchRow, lines: lines.slice(0, height).map((spans) => fit(spans, width)), targets, controls, sections };
 }

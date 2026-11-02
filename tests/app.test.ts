@@ -76,9 +76,11 @@ test("application handles external termination and releases its terminal", async
 });
 
 
-test("actual CLI previews full files and diffs then returns input to its running child", async () => {
+test("actual CLI searches files, previews files and diffs, then restores child input", async () => {
   const root = await directory(true);
   await writeFile(join(root, "preview.txt"), "actual-diff-content\n");
+  await mkdir(join(root, "src"));
+  await writeFile(join(root, "src/needle.ts"), "search-preview-content\n");
   const setup = await createTestRenderer({ width: 120, height: 30, exitOnCtrlC: false });
   let child: ReturnType<typeof startPty> | undefined;
   const host = new EmbeddedTerminalRenderable(setup.renderer, { width: 120, height: 30 });
@@ -102,6 +104,19 @@ test("actual CLI previews full files and diffs then returns input to its running
     expect(rows).toHaveLength(2);
     const [fileRow, diffRow] = rows;
     if (fileRow === undefined || diffRow === undefined) throw new Error("Missing file/diff entries");
+    const searchRow = setup.captureCharFrame().split("\n").findIndex((row) => row.includes("Search files"));
+    if (searchRow < 0) throw new Error("Missing search field");
+    child.write(`\x1b[<0;5;${searchRow + 1}M\x1b[<0;5;${searchRow + 1}m`);
+    child.write("NEEDLE");
+    await frame("needle.ts");
+    expect(setup.captureCharFrame()).toContain("1/2");
+    child.write("\r");
+    await frame("File snapshot");
+    await frame("search-preview-content");
+    child.write("q"); await frame("APP_READY");
+    child.write(`\x1b[<0;5;${searchRow + 1}M\x1b[<0;5;${searchRow + 1}m`);
+    child.write("\x1b");
+    await frame("Search files");
     child.write(`\x1b[<0;11;${fileRow + 1}M\x1b[<0;11;${fileRow + 1}m`);
     await frame("File snapshot");
     await frame("actual-diff-content");

@@ -29,6 +29,7 @@ Start inside a Git working tree, including any subfolder. If the initial Git rea
 - **Ctrl+G twice within 300 ms:** restore the previous sidebar state and send one literal Ctrl+G to the child.
 - Below 100 terminal columns, the sidebar automatically collapses; widening restores your selected visibility.
 - **Click Files or Changes:** collapse/expand that section; the other gets the freed space.
+- **Click Search files under Files:** type part of a filename or path to filter the list. Click a result to preview it, or press **Enter** to open the first visible match. **Esc** clears the search and returns typing to the CLI.
 - **Mouse wheel over a section:** scroll that section independently.
 - **Click a folder in Files:** expand/collapse it. Click a file to preview its full working-tree contents.
 - **Click a row in Changes:** open a read-only diff snapshot. The selected entry stays highlighted until you close the preview.
@@ -42,6 +43,8 @@ The sidebar sits on the left and refreshes about once per second. It uses 34 col
 Files and Changes are stacked and open by default. When both lists need room, Files gets about 60% and Changes 40%; shorter lists give unused space to the other. Section headers show the visible row range when scrolling is needed.
 
 Files shows tracked and non-ignored untracked paths in expandable folders. Deleted paths and empty directories are omitted; submodule contents are not traversed. The file list is limited to 10,000 paths. A failed refresh keeps the last tree and marks it stale.
+
+File search matches literal filename or repository-relative path fragments without regard to case. Results appear as a flat list, including matches inside collapsed folders, and the Files header shows matches/total. Clearing the query restores the tree's expanded folders. Search uses the current file list and its exclusions; it searches names and paths, not file contents. Clicking search closes an open preview. Typing and paste stay in the search field while it has focus. Click the CLI or press Esc to resume child input; Ctrl+C still reaches the child.
 
 Files and Changes share compact rows with filenames and right-aligned colored Git badges. Changes shows the parent folder beside the filename when space allows; group labels identify the comparison. Filenames and folders are relative to the Git repository root.
 

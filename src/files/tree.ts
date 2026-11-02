@@ -3,6 +3,11 @@ export type TreeEntry = Readonly<{ path: string; name: string; kind: "directory"
 
 type Node = { entry: TreeEntry; children: Map<string, Node> };
 
+export function searchFilePaths(paths: readonly string[], query: string): readonly string[] {
+  const fragment = query.trim().toLowerCase();
+  return paths.filter((path) => path.toLowerCase().includes(fragment)).sort();
+}
+
 export function fileTree(paths: readonly string[], expanded: ReadonlySet<string>): readonly TreeEntry[] {
   const root = new Map<string, Node>();
   for (const path of paths) {

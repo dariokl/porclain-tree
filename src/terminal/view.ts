@@ -1,4 +1,4 @@
-import { bg, bold, BoxRenderable, EmbeddedTerminalRenderable, fg, KeyEvent, StyledText, TextRenderable } from "@opentui/core";
+import { bg, bold, BoxRenderable, EmbeddedTerminalRenderable, fg, InputRenderable, KeyEvent, StyledText, TextRenderable } from "@opentui/core";
 import type { CliRenderer, PasteEvent } from "@opentui/core";
 import type { PreviewState, PreviewSelection } from "../preview";
 import type { FileListState } from "../files/tree";
@@ -91,6 +91,14 @@ export function mountTerminal(
       terminal.focus();
     },
   });
+  function scrollExplorer(row: number, delta: number): boolean {
+    const section = content.sections.find((section) => row >= section.header && row < section.top + section.height);
+    if (!section || !section.height) return false;
+    const current = section.name === "files" ? { ...explorer, filesOffset: section.offset } : { ...explorer, changesOffset: section.offset };
+    explorer = reduceExplorer(current, { type: "scroll", section: section.name, delta });
+    refreshSidebar();
+    return true;
+  }
   const instructions = new TextRenderable(renderer, {
     id: "changes", width: "100%", height: Math.max(0, renderer.height - 1), flexShrink: 0, wrapMode: "none",
     fg: palette.text, bg: palette.background,
@@ -104,17 +112,33 @@ export function mountTerminal(
       }
       const target = content.targets.find((target) => target.row === event.y - instructions.y);
       if (!target) return;
-      event.preventDefault(); event.stopPropagation(); selectPreview(target.selection);
+      event.preventDefault(); event.stopPropagation(); terminal.focus(); selectPreview(target.selection);
     },
     onMouseScroll(event) {
       if (!event.scroll || !["up", "down"].includes(event.scroll.direction)) return;
-      const row = event.y - instructions.y;
-      const section = content.sections.find((section) => row >= section.header && row < section.top + section.height);
-      if (!section || !section.height) return;
+      if (scrollExplorer(event.y - instructions.y, event.scroll.direction === "up" ? -3 : 3)) {
+        event.preventDefault(); event.stopPropagation();
+      }
+    },
+  });
+  const search = new InputRenderable(renderer, {
+    id: "file-search", position: "absolute", left: 2, top: content.searchRow ?? 0,
+    width: Math.max(0, sidebarColumns(renderer.width, true) - 5), zIndex: 2,
+    visible: content.searchRow !== null && sidebarColumns(renderer.width, true) > 0,
+    placeholder: "Search files…", maxLength: 200,
+    backgroundColor: palette.background, textColor: palette.text,
+    focusedBackgroundColor: palette.activeBackground, focusedTextColor: palette.text, placeholderColor: palette.muted,
+    onMouseDown(event) {
+      if (event.button !== 0) return;
       event.preventDefault(); event.stopPropagation();
-      const current = section.name === "files" ? { ...explorer, filesOffset: section.offset } : { ...explorer, changesOffset: section.offset };
-      explorer = reduceExplorer(current, { type: "scroll", section: section.name, delta: event.scroll.direction === "up" ? -3 : 3 });
-      refreshSidebar();
+      if (preview.isOpen()) selectPreview(null);
+      search.focus();
+    },
+    onMouseScroll(event) {
+      if (!event.scroll || !["up", "down"].includes(event.scroll.direction)) return;
+      if (scrollExplorer(event.y - instructions.y, event.scroll.direction === "up" ? -3 : 3)) {
+        event.preventDefault(); event.stopPropagation();
+      }
     },
   });
   const footer = new BoxRenderable(renderer, {
@@ -126,7 +150,7 @@ export function mountTerminal(
     content: "Ctrl+G", fg: palette.muted, bg: palette.background,
   });
   footer.add(shortcut); footer.add(themeSwitch);
-  sidebar.add(instructions); sidebar.add(footer);
+  sidebar.add(instructions); sidebar.add(footer); sidebar.add(search);
   layout.add(sidebar);
   layout.add(terminal);
   renderer.root.add(layout);
@@ -134,10 +158,16 @@ export function mountTerminal(
   const refreshSidebar = () => {
     content = explorerLayout(changes, files, projectName, Math.max(0, renderer.height - 1), Math.max(0, sidebarColumns(renderer.width, state.visible) - 5), explorer);
     instructions.content = sidebarText(content, palette, active, Math.max(0, sidebarColumns(renderer.width, state.visible) - 5));
+    const visible = content.searchRow !== null && sidebarColumns(renderer.width, state.visible) > 0;
+    if (!visible && search.focused) terminal.focus();
+    search.top = content.searchRow ?? 0;
+    search.width = Math.max(0, sidebarColumns(renderer.width, state.visible) - 5);
+    search.visible = visible;
   };
 
   const resize = () => {
     const width = sidebarColumns(renderer.width, state.visible);
+    if (!width && search.focused) terminal.focus();
     sidebar.width = width;
     sidebar.visible = width > 0;
     terminal.width = Math.max(1, renderer.width - width);
@@ -157,15 +187,32 @@ export function mountTerminal(
     themeSwitch.content = switchText();
     instructions.bg = palette.background;
     instructions.fg = palette.text;
+    search.backgroundColor = palette.background; search.textColor = palette.text;
+    search.focusedBackgroundColor = palette.activeBackground; search.focusedTextColor = palette.text; search.placeholderColor = palette.muted;
     refreshSidebar();
     preview.setTheme(palette);
   };
   const ordinaryInput = () => { state = reduceSidebar(state, { type: "input" }).state; };
+  const updateSearch = () => {
+    if (search.value === explorer.query) return;
+    explorer = reduceExplorer(explorer, { type: "search", query: search.value }); refreshSidebar();
+  };
   const keypress = (key: KeyEvent) => {
     if (preview.isOpen() && !(key.ctrl && key.name === "g" && !key.meta && !key.shift)) {
       key.preventDefault(); key.stopPropagation(); ordinaryInput();
       if (key.ctrl && key.name === "c") child?.write(terminal.encodeKey(key));
       else preview.handleKey(key);
+    } else if (search.focused && !(key.ctrl && key.name === "g" && !key.meta && !key.shift)) {
+      key.preventDefault(); key.stopPropagation(); ordinaryInput();
+      if (key.eventType === "release") return;
+      if (key.ctrl && key.name === "c") child?.write(terminal.encodeKey(key));
+      else if (key.name === "escape") {
+        search.value = ""; updateSearch(); terminal.focus();
+      } else if (key.name === "return" || key.name === "linefeed") {
+        const target = content.targets.find((target) => target.selection.comparison === "file");
+        if (explorer.query.trim() && target) { terminal.focus(); selectPreview(target.selection); }
+        else if (!explorer.query.trim()) terminal.focus();
+      } else { search.handleKeyPress(key); updateSearch(); }
     } else if (key.name === "linefeed") {
       // OpenTUI 0.8.1 parses LF but its embedded encoder has no linefeed key.
       // Encode the equivalent Ctrl+J through the child's negotiated keyboard mode.
@@ -198,6 +245,7 @@ export function mountTerminal(
   const paste = (event: PasteEvent) => {
     ordinaryInput();
     if (preview.isOpen()) { event.preventDefault(); event.stopPropagation(); }
+    else if (search.focused) { event.preventDefault(); event.stopPropagation(); search.handlePaste(event); updateSearch(); }
   };
   const session = child;
   renderer.on("resize", resize);

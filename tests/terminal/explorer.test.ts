@@ -91,3 +91,22 @@ test("deep tree indentation leaves readable filenames beside combined status bad
   expect(rows[0]).toContain("fferent.ts"); expect(rows[1]).toContain("portant.ts");
   expect(rows.every((row) => row?.endsWith("MM*") && Bun.stringWidth(row) <= 23)).toBe(true);
 });
+
+test("search exposes matching files in collapsed folders and keeps Changes and expansion state", () => {
+  const initial = { ...createExplorerState(), filesOffset: 30, changesOffset: 2 };
+  const state = reduceExplorer(initial, { type: "search", query: "app" });
+  const fileList = { paths: ["src/App.ts", "tests/app.test.ts", "README.md"], error: null };
+  const value = explorerLayout(changes, fileList, "fixture", 30, 29, state);
+  expect(value.searchRow).not.toBeNull();
+  expect(value.targets.filter((target) => target.selection.comparison === "file").map((target) => target.selection.path)).toEqual(["src/App.ts", "tests/app.test.ts"]);
+  expect(text(value)).toContain("2/3");
+  expect(text(value)).toContain("src/");
+  expect(state.filesOffset).toBe(0); expect(state.changesOffset).toBe(2);
+  expect(state.expanded).toBe(initial.expanded);
+  expect(initial.filesOffset).toBe(30);
+  const empty = explorerLayout(changes, fileList, "fixture", 30, 29, reduceExplorer(state, { type: "search", query: "no-such-file" }));
+  expect(text(empty)).toContain("No matching files");
+  const restored = explorerLayout(changes, fileList, "fixture", 30, 29, reduceExplorer(state, { type: "search", query: "" }));
+  expect(text(restored)).toContain("▸ src");
+  expect(restored.targets.some((target) => target.selection.path === "src/App.ts")).toBe(false);
+});
