@@ -1,83 +1,101 @@
 # PorclainTree
 
-A terminal wrapper that runs your CLI beside a read-only file explorer and live Git changes list. Use it with a coding assistant, a shell, or another interactive command.
+Run your CLI beside a read-only file explorer and live Git changes list. Use it with a coding assistant, a shell, or another interactive command, and inspect files and diffs without leaving the terminal.
 
-## Getting started
+## Screenshots
 
-Requires Linux, [Bun](https://bun.com/docs/installation) 1.3.14 or newer, Git, and an interactive terminal.
+> Screenshot placeholder: sidebar beside a running CLI.
+>
+> Screenshot placeholder: highlighted file and diff previews in Dark and Light themes.
 
-From this checkout, install dependencies and launch a command:
+## Requirements
+
+- Linux, the currently supported platform. File-preview checks and child-process cleanup use Linux's `/proc` filesystem; macOS and Windows support is not implemented or verified.
+- [Bun](https://bun.com/docs/installation) 1.3.14 or newer.
+- Git and an interactive terminal with stdin and stdout attached.
+
+Python highlighting uses a bundled parser. No Python installation or runtime parser download is needed.
+
+## Quick start
+
+From this checkout:
 
 ```sh
 bun install --frozen-lockfile
 bun start -- bash
+```
+
+Replace `bash` with the command you want to run, including its arguments:
+
+```sh
 bun start -- codex
 ```
 
-The command keeps your working directory, environment, and arguments. To work in another Git repository, launch using the absolute path to this checkout's entry point:
+Start inside a Git working tree, including any subfolder. To use PorclainTree in another repository:
 
 ```sh
 cd /path/to/your/git-project
 bun run /absolute/path/to/porcelain/src/cli.ts -- codex
 ```
 
-Start inside a Git working tree, including any subfolder. If the initial Git read fails, PorclainTree reports the error before launching your command.
+Your command keeps its working directory, environment, and arguments. Exit using its normal controls; PorclainTree returns its exit code. An initial Git failure is reported before the command starts.
 
 ## Controls
 
-- **Ctrl+G:** hide/show the sidebar.
-- **Ctrl+G twice within 300 ms:** restore the previous sidebar state and send one literal Ctrl+G to the child.
-- Below 100 terminal columns, the sidebar automatically collapses; widening restores your selected visibility.
-- **Click Files or Changes:** collapse/expand that section; the other gets the freed space.
-- **Click Search files under Files:** type part of a filename or path to filter the list. Click a result to preview it, or press **Enter** to open the first visible match. **Esc** clears the search and returns typing to the CLI.
-- **Mouse wheel over a section:** scroll that section independently.
-- **Click a folder in Files:** expand/collapse it. Click a file to preview its full working-tree contents.
-- **Click a row in Changes:** open a read-only diff snapshot. The selected entry stays highlighted until you close the preview.
-- **In the preview:** arrows or the mouse wheel scroll vertically/horizontally; Page Up/Down and Home/End move through the preview. **Esc**, **q**, or **Close** returns to the CLI. Typing and paste stay out of the child while the preview is open; **Ctrl+C** still reaches it.
-- Exit using your command's normal controls. PorclainTree returns its exit code.
+| Control | Action |
+| --- | --- |
+| **Ctrl+G** | Hide or show the sidebar. |
+| **Ctrl+G twice within 300 ms** | Restore the previous sidebar state and send one literal Ctrl+G to the command. |
+| Click **Files** or **Changes** | Collapse or expand that section. |
+| Click a folder | Expand or collapse it. |
+| Click a file or change | Open a file or diff snapshot. |
+| Click **Search files** | Focus filename/path search; typing and paste stay in the search field. |
+| **Enter** in search | Preview the first visible match. |
+| **Esc** in search | Clear the query and return typing to the command. Clicking the command also returns typing to it. |
+| Mouse wheel over a section | Scroll Files or Changes independently. |
+| Arrows or mouse wheel in a preview | Scroll vertically or horizontally. |
+| **Page Up/Down**, **Home/End** in a preview | Move through the snapshot. |
+| **Esc**, **q**, or **Close** in a preview | Close it and return to the command. |
+| **Ctrl+C** | Reach the command, including while search or a preview is active. |
+| Click **Dark/Light** in the footer | Switch the sidebar and preview theme. |
 
-## Sidebar
+The sidebar collapses below 100 terminal columns and restores your selected visibility when widened. While a preview is open, ordinary typing and paste are captured so they do not reach the command.
 
-The sidebar sits on the left and refreshes about once per second. It uses 34 columns in terminals at least 120 columns wide, and 28 columns at widths of 100–119.
+## Files and changes
 
-Files and Changes are stacked and open by default. When both lists need room, Files gets about 60% and Changes 40%; shorter lists give unused space to the other. Section headers show the visible row range when scrolling is needed.
+Files lists tracked and non-ignored untracked paths in expandable folders. Search matches filename or repository-relative path fragments without regard to case, including inside collapsed folders. It searches names and paths, not file contents. Clearing the query restores your expanded folders.
 
-Files shows tracked and non-ignored untracked paths in expandable folders. Deleted paths and empty directories are omitted; submodule contents are not traversed. The file list is limited to 10,000 paths. A failed refresh keeps the last tree and marks it stale.
+Changes groups unstaged, staged, untracked, and conflicted paths, with Git badges beside filenames. A `*` marks paths already dirty at launch. These are current Git changes, not changes attributed to a particular session or assistant.
 
-File search matches literal filename or repository-relative path fragments without regard to case. Results appear as a flat list, including matches inside collapsed folders, and the Files header shows matches/total. Clearing the query restores the tree's expanded folders. Search uses the current file list and its exclusions; it searches names and paths, not file contents. Clicking search closes an open preview. Typing and paste stay in the search field while it has focus. Click the CLI or press Esc to resume child input; Ctrl+C still reaches the child.
+The sections share the sidebar's height, scroll independently, and refresh about once per second. A failed refresh retains the previous list and marks it stale while your command stays usable.
 
-Files and Changes share compact rows with filenames and right-aligned colored Git badges. Changes shows the parent folder beside the filename when space allows; group labels identify the comparison. Filenames and folders are relative to the Git repository root.
+## File and diff previews
 
-The sidebar uses a black or white background with neutral gray text and restrained green, amber, and red status colors. Click the small **Dark/Light switch** in the footer beside **Ctrl+G** to change it. This affects the sidebar and preview; the child CLI keeps its own rendering and theme.
+Previews cover the right pane while your command keeps running underneath. Files shows full UTF-8 working-tree contents with line numbers. JavaScript/JSX, TypeScript/TSX, and Python receive syntax highlighting; other files remain numbered plain text.
 
-The sidebar starts dark. Optionally set `PORCLAINTREE_THEME=light` or `PORCLAINTREE_THEME=dark` to choose its initial theme:
+Diff headings identify the comparison: staged against HEAD, unstaged against the index, untracked against empty content, or a combined conflict diff. Ordinary text diffs show syntax colors, line numbers, `+`/`−` signs, and subtle added/deleted backgrounds. Numbers refer to the new file for additions and context, and the old file for deletions. Patch metadata, hunk labels, and no-final-newline markers remain visible. Combined conflicts, binary summaries, metadata-only changes, and incomplete patches use the raw diff view.
+
+Previews never stage or edit files. They are snapshots: select an entry again to reload it. Control characters are escaped, tabs appear as four spaces, and long lines scroll horizontally.
+
+The **Dark/Light** switch affects only the sidebar and preview. The command keeps its own colors. Dark is the default; optionally choose the initial theme:
 
 ```sh
 PORCLAINTREE_THEME=light bun start -- codex
 ```
 
-Changes are grouped into unstaged, staged, untracked, and conflicted entries. A file with both staged and unstaged edits appears in both groups. Its Files badge can contain both index and worktree status characters. The Changes header counts distinct paths.
+## Limitations
 
-- `*` marks paths that already had changes when you started. The list shows current Git changes; it does not attribute edits to a particular session or assistant.
-- Untracked folders may appear as a single entry. Ignored untracked files stay excluded.
-- Long names and paths show `…`. Scroll within each section to reach entries that do not fit vertically.
-- A failed refresh labels the last successful list as stale. The child stays usable, and a successful refresh clears the warning.
-
-## File and diff previews
-
-The preview covers the right pane while your command keeps running underneath. Files opens the full UTF-8 working-tree file, including unchanged files. Changes opens the selected Git comparison: staged changes against HEAD, unstaged changes against the index, untracked files against empty content, or a combined conflict diff. Click another entry to load a new snapshot; previews do not refresh automatically.
-
-File previews show line numbers and identify the language from the filename. JavaScript/JSX, TypeScript/TSX, and Python receive syntax highlighting in both Dark and Light themes; other files remain numbered plain text. All parsers are local, including the bundled Python grammar: no Python installation or runtime download is needed.
-
-Ordinary text diffs use a unified view with syntax colors, `+`/`−` signs, and subtle added/deleted backgrounds. Numbers refer to the new file for additions and context, and the old file for deletions. Patch metadata, hunk labels, and no-final-newline markers remain visible. Combined conflict diffs, binary summaries, metadata-only changes, and incomplete patches retain the raw diff view.
-
-Previews never stage or edit files. Binary files show Git's summary in diff previews and an explanation in file previews. Symlinks and non-regular files cannot be opened as text; directory summaries cannot be expanded, and renames into or out of their own former directory path require direct Git inspection. Reads are limited to two seconds, 1 MiB, and 10,000 lines. Unsupported encoding or an unavailable file shows an explanation. Control characters are displayed as escaped text, tabs as four spaces, and long lines can be scrolled horizontally. Preview colors follow the sidebar switch without changing the child CLI's theme.
+- Reads are bounded to two seconds, 1 MiB, and 10,000 lines; unsupported encoding or unavailable content shows an explanation.
+- The file list is limited to 10,000 paths. Deleted paths and empty directories are omitted, and submodule contents are not traversed.
+- Binary files show an explanation in file previews and Git's summary in diffs. Symlinks and non-regular files cannot be previewed as text.
+- Untracked directories may appear as summaries in Changes; those summaries cannot be expanded. Renames into or out of their own former directory path require direct Git inspection.
+- Commands that deliberately detach into their own session are outside the wrapper's cleanup scope.
 
 ## Development
+
+The project uses TypeScript, Bun, and OpenTUI. Run the configured checks with:
 
 ```sh
 bun run typecheck
 bun test
 ```
-
-The project uses TypeScript, Bun, and OpenTUI. Process cleanup targets Linux; commands that deliberately detach into their own session are outside the wrapper's cleanup scope.
