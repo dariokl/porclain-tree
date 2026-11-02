@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
 import { createTestRenderer } from "@opentui/core/testing";
+import { EmbeddedTerminalRenderable } from "@opentui/core";
+import { startPty } from "../../src/terminal/pty";
 import { mountTerminal } from "../../src/terminal/view";
 import { applyStatus, createChangesState } from "../../src/git/status";
 import type { GitStatusResult } from "../../src/git/status";
@@ -135,7 +137,7 @@ test("native sidebar distinguishes filenames from paths and keeps its footer aft
     expect(directory).toBeDefined();
     expect(child).toBeDefined();
     expect(filename?.fg.equals(directory?.fg)).toBe(false);
-    expect(filename?.bg.equals(child?.bg)).toBe(false);
+    expect(filename?.bg.toInts()).toEqual([0, 0, 0, 255]);
     expect(setup.captureCharFrame().split("\n")[28]?.slice(0, 34)).toContain("╰─ Ctrl+G");
     setup.resize(110, 18);
     await setup.renderOnce();
@@ -153,10 +155,10 @@ test("native sidebar distinguishes filenames from paths and keeps its footer aft
   }
 });
 
-test("passive light/dark hints restyle the sidebar without altering child colors", async () => {
+test("clicking the sidebar switch changes light/dark without altering child colors or focus", async () => {
   const setup = await createTestRenderer({ width: 120, height: 30, exitOnCtrlC: false });
   const session = mountTerminal(setup.renderer, { executable: "sh", args: ["-c",
-    "printf 'DEFAULT\\033[48;2;70;80;90mCHILD_PANEL\\033[0mREADY\\n'; read -r line",
+    "stty -echo; printf 'DEFAULT\\033[48;2;70;80;90mCHILD_PANEL\\033[0mREADY\\n'; while read -r line; do printf 'reply:%s\\n' \"$line\"; done",
   ] }, process.cwd(), createChangesState([{ path: "view.ts", indexStatus: " ", worktreeStatus: "M" }]), "fixture");
   const colors = (text: string) => {
     const span = setup.captureSpans().lines.flatMap((line) => line.spans).find((part) => part.text.includes(text));
@@ -164,20 +166,46 @@ test("passive light/dark hints restyle the sidebar without altering child colors
   };
   try {
     await waitForFrame(setup, "READY");
+    expect(setup.captureCharFrame()).toContain("Dark [●──] Light");
     const child = colors("DEFAULT");
     const panel = colors("CHILD_PANEL");
-    setup.renderer.emit("theme_mode", "light");
+    await setup.mockMouse.click(9, 0);
     await setup.renderOnce();
-    expect(colors("view.ts").bg).toEqual([241, 241, 237, 255]);
+    expect(setup.captureCharFrame()).toContain("Dark [──●] Light");
+    expect(colors("view.ts").bg).toEqual([255, 255, 255, 255]);
     expect(colors("DEFAULT")).toEqual(child);
     expect(colors("CHILD_PANEL")).toEqual(panel);
-    setup.renderer.emit("theme_mode", "dark");
+    await setup.mockInput.typeText("still-working");
+    setup.mockInput.pressEnter();
+    await waitForFrame(setup, "reply:still-working");
+    await setup.mockMouse.click(9, 0, 2);
     await setup.renderOnce();
-    expect(colors("view.ts").bg).toEqual([20, 22, 21, 255]);
-    expect(colors("DEFAULT")).toEqual(child);
+    expect(colors("view.ts").bg).toEqual([255, 255, 255, 255]);
+    await setup.mockMouse.click(9, 0);
+    await setup.renderOnce();
+    expect(colors("view.ts").bg).toEqual([0, 0, 0, 255]);
     expect(colors("CHILD_PANEL")).toEqual(panel);
   } finally {
     await session.dispose();
+    await setup.dispose();
+  }
+});
+
+test("PORCLAINTREE_THEME forces a white sidebar in the actual CLI without a light hint", async () => {
+  const setup = await createTestRenderer({ width: 120, height: 30, exitOnCtrlC: false });
+  let child: ReturnType<typeof startPty> | undefined;
+  const host = new EmbeddedTerminalRenderable(setup.renderer, { width: 120, height: 30, onData: (bytes) => child?.write(bytes) });
+  setup.renderer.root.add(host);
+  child = startPty({ executable: "env", args: ["PORCLAINTREE_THEME=light", process.execPath,
+    new URL("../../src/cli.ts", import.meta.url).pathname, "--", "sh", "-c", "printf 'CHILD_READY\\n'; read -r line",
+  ] }, { cwd: process.cwd(), cols: 120, rows: 30, onData: (bytes) => host.write(bytes) });
+  try {
+    await waitForFrame(setup, "CHILD_READY");
+    const spans = setup.captureSpans().lines.flatMap((line) => line.spans);
+    expect(spans.find((span) => span.text.includes("porclain"))?.bg.toInts()).toEqual([255, 255, 255, 255]);
+    expect(spans.find((span) => span.text.includes("CHILD_READY"))?.bg.toInts()).toEqual([0, 0, 0, 255]);
+  } finally {
+    await child.dispose();
     await setup.dispose();
   }
 });

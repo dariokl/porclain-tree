@@ -205,8 +205,6 @@ export function formatSidebar(
     footer.push(continuation("△ Git unavailable", "warning"));
     if (height >= 8) footer.push(continuation("Showing last result"));
     footer.push(continuation(safeDisplay(state.error), "warning"));
-  } else if (!compact) {
-    footer.push(continuation("Git refresh · ~1s"));
   }
   footer.push(shortcut);
   if (!compact) footer.push(line(""));

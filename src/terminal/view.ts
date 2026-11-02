@@ -10,7 +10,7 @@ import { sidebarTheme } from "./theme";
 import type { SidebarTheme } from "./theme";
 
 function sidebarText(changes: ChangesState, projectName: string, rows: number, width: number, palette: SidebarTheme): StyledText {
-  const lines = formatSidebar(changes, projectName, rows, Math.max(0, width - 5));
+  const lines = formatSidebar(changes, projectName, Math.max(0, rows - 1), Math.max(0, width - 5));
   return new StyledText(lines.flatMap((line, index) => [
     ...(index > 0 ? [fg(palette.text)("\n")] : []),
     ...line.map((span) => {
@@ -32,10 +32,12 @@ export function mountTerminal(
   cwd: string,
   initialChanges: ChangesState,
   projectName: string,
+  themeMode: "light" | "dark" = "dark",
 ): MountedTerminal {
   let state: SidebarState = { visible: true, lastToggleAt: null };
   let changes = initialChanges;
-  let palette = sidebarTheme(renderer.themeMode);
+  let selectedTheme = themeMode;
+  let palette = sidebarTheme(selectedTheme);
   let child: PtySession | undefined;
   const layout = new BoxRenderable(renderer, {
     id: "workspace", width: "100%", height: "100%", flexDirection: "row",
@@ -48,14 +50,33 @@ export function mountTerminal(
   });
   const sidebar = new BoxRenderable(renderer, {
     id: "sidebar", width: sidebarColumns(renderer.width, true), height: "100%",
+    flexDirection: "column",
     flexShrink: 0, border: ["right"], borderColor: palette.border,
     backgroundColor: palette.background, paddingLeft: 2, paddingRight: 2, overflow: "hidden",
   });
+  const switchText = () => new StyledText([
+    fg(selectedTheme === "dark" ? palette.text : palette.muted)("Dark "),
+    fg(palette.accent)(selectedTheme === "dark" ? "[●──]" : "[──●]"),
+    fg(selectedTheme === "light" ? palette.text : palette.muted)(" Light"),
+  ]);
+  const themeSwitch = new TextRenderable(renderer, {
+    id: "theme-switch", width: 16, height: 1, flexShrink: 0,
+    content: switchText(), bg: palette.background, selectable: false,
+    onMouseDown(event) {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      selectedTheme = selectedTheme === "dark" ? "light" : "dark";
+      updateTheme();
+      terminal.focus();
+    },
+  });
   const instructions = new TextRenderable(renderer, {
-    id: "changes", width: "100%", height: "100%", wrapMode: "none",
+    id: "changes", width: "100%", height: Math.max(0, renderer.height - 1), flexShrink: 0, wrapMode: "none",
     fg: palette.text, bg: palette.background,
     content: sidebarText(changes, projectName, renderer.height, sidebarColumns(renderer.width, true), palette),
   });
+  sidebar.add(themeSwitch);
   sidebar.add(instructions);
   layout.add(sidebar);
   layout.add(terminal);
@@ -67,13 +88,16 @@ export function mountTerminal(
     sidebar.visible = width > 0;
     terminal.width = Math.max(1, renderer.width - width);
     terminal.height = Math.max(1, renderer.height);
+    instructions.height = Math.max(0, renderer.height - 1);
     instructions.content = sidebarText(changes, projectName, renderer.height, width, palette);
     child?.resize(Math.max(1, renderer.width - width), Math.max(1, renderer.height));
   };
-  const onTheme = (mode: "light" | "dark") => {
-    palette = sidebarTheme(mode);
+  const updateTheme = () => {
+    palette = sidebarTheme(selectedTheme);
     sidebar.backgroundColor = palette.background;
     sidebar.borderColor = palette.border;
+    themeSwitch.bg = palette.background;
+    themeSwitch.content = switchText();
     instructions.bg = palette.background;
     instructions.fg = palette.text;
     instructions.content = sidebarText(changes, projectName, renderer.height, sidebarColumns(renderer.width, state.visible), palette);
@@ -110,7 +134,6 @@ export function mountTerminal(
   }
   const session = child;
   renderer.on("resize", resize);
-  renderer.on("theme_mode", onTheme);
   renderer.keyInput.on("keypress", keypress);
   renderer.keyInput.on("paste", ordinaryInput);
   resize();
@@ -119,7 +142,6 @@ export function mountTerminal(
   let disposal: Promise<void> | undefined;
   async function shutdown(): Promise<void> {
     renderer.off("resize", resize);
-    renderer.off("theme_mode", onTheme);
     renderer.keyInput.off("keypress", keypress);
     renderer.keyInput.off("paste", ordinaryInput);
     try {

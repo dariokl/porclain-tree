@@ -36,7 +36,13 @@ The sidebar sits on the left and refreshes about once per second. It uses 34 col
 
 The Margin layout connects the project header, change groups, and shortcut footer with a quiet rail. Status markers precede filenames, with directory paths shown below, relative to the Git repository root.
 
-The sidebar uses quiet light/dark colors based on theme hints already available from the terminal UI. It defaults to dark when no hint is available. These colors apply to the sidebar; the child CLI keeps its own rendering and theme.
+The sidebar uses a black or white background with neutral gray text and restrained green, amber, and red status colors. Click the small **Dark/Light switch** at the top of the sidebar to change it. This affects only the sidebar; the child CLI keeps its own rendering and theme.
+
+The sidebar starts dark. Optionally set `PORCLAINTREE_THEME=light` or `PORCLAINTREE_THEME=dark` to choose its initial theme:
+
+```sh
+PORCLAINTREE_THEME=light bun start -- codex
+```
 
 Changes are grouped into unstaged, staged, untracked, and conflicted entries. A file with both staged and unstaged edits appears in both groups. The header counts distinct paths.
 
