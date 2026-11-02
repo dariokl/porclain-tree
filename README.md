@@ -33,7 +33,7 @@ Start inside a Git working tree, including any subfolder. If the initial Git rea
 - **Mouse wheel over a section:** scroll that section independently.
 - **Click a folder in Files:** expand/collapse it. Click a file to preview its full working-tree contents.
 - **Click a row in Changes:** open a read-only diff snapshot. The selected entry stays highlighted until you close the preview.
-- **In the preview:** arrows scroll vertically/horizontally; Page Up/Down and Home/End move through the preview. **Esc**, **q**, or **Close** returns to the CLI. Typing and paste stay out of the child while the preview is open; **Ctrl+C** still reaches it.
+- **In the preview:** arrows or the mouse wheel scroll vertically/horizontally; Page Up/Down and Home/End move through the preview. **Esc**, **q**, or **Close** returns to the CLI. Typing and paste stay out of the child while the preview is open; **Ctrl+C** still reaches it.
 - Exit using your command's normal controls. PorclainTree returns its exit code.
 
 ## Sidebar
@@ -66,6 +66,10 @@ Changes are grouped into unstaged, staged, untracked, and conflicted entries. A 
 ## File and diff previews
 
 The preview covers the right pane while your command keeps running underneath. Files opens the full UTF-8 working-tree file, including unchanged files. Changes opens the selected Git comparison: staged changes against HEAD, unstaged changes against the index, untracked files against empty content, or a combined conflict diff. Click another entry to load a new snapshot; previews do not refresh automatically.
+
+File previews show line numbers and identify the language from the filename. JavaScript/JSX, TypeScript/TSX, and Python receive syntax highlighting in both Dark and Light themes; other files remain numbered plain text. All parsers are local, including the bundled Python grammar: no Python installation or runtime download is needed.
+
+Ordinary text diffs use a unified view with syntax colors, `+`/`−` signs, and subtle added/deleted backgrounds. Numbers refer to the new file for additions and context, and the old file for deletions. Patch metadata, hunk labels, and no-final-newline markers remain visible. Combined conflict diffs, binary summaries, metadata-only changes, and incomplete patches retain the raw diff view.
 
 Previews never stage or edit files. Binary files show Git's summary in diff previews and an explanation in file previews. Symlinks and non-regular files cannot be opened as text; directory summaries cannot be expanded, and renames into or out of their own former directory path require direct Git inspection. Reads are limited to two seconds, 1 MiB, and 10,000 lines. Unsupported encoding or an unavailable file shows an explanation. Control characters are displayed as escaped text, tabs as four spaces, and long lines can be scrolled horizontally. Preview colors follow the sidebar switch without changing the child CLI's theme.
 

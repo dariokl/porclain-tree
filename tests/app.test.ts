@@ -123,7 +123,8 @@ test("actual CLI searches files, previews files and diffs, then restores child i
     expect(setup.captureCharFrame()).toContain("Working-tree contents");
     child.write("q"); await frame("APP_READY");
     child.write(`\x1b[<0;11;${diffRow + 1}M\x1b[<0;11;${diffRow + 1}m`);
-    await frame("+actual-diff-content");
+    await frame("actual-diff-content");
+    expect(setup.captureCharFrame()).toMatch(/1\s+\+\s+actual-diff-content/);
     expect(setup.captureCharFrame()).toContain("Untracked · file vs empty");
     child.write("q");
     await frame("APP_READY");

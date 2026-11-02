@@ -238,7 +238,8 @@ export function mountTerminal(
       onData: (bytes) => terminal.write(bytes),
     });
   } catch (error: unknown) {
-    preview.dispose();
+    // No preview data (and therefore no parser worker) exists before startup.
+    void preview.dispose();
     layout.destroyRecursively();
     throw error;
   }
@@ -262,8 +263,8 @@ export function mountTerminal(
     try {
       await session.dispose();
     } finally {
-      preview.dispose();
-      layout.destroyRecursively();
+      try { await preview.dispose(); }
+      finally { layout.destroyRecursively(); }
     }
   }
   return {
