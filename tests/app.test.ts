@@ -76,7 +76,7 @@ test("application handles external termination and releases its terminal", async
 });
 
 
-test("actual CLI loads an untracked diff and returns input to its running child", async () => {
+test("actual CLI previews full files and diffs then returns input to its running child", async () => {
   const root = await directory(true);
   await writeFile(join(root, "preview.txt"), "actual-diff-content\n");
   const setup = await createTestRenderer({ width: 120, height: 30, exitOnCtrlC: false });
@@ -98,8 +98,16 @@ test("actual CLI loads an untracked diff and returns input to its running child"
   }
   try {
     await frame("APP_READY");
-    const row = setup.captureCharFrame().split("\n").findIndex((row) => row.includes("preview.txt"));
-    child.write(`\x1b[<0;11;${row + 1}M\x1b[<0;11;${row + 1}m`);
+    const rows = setup.captureCharFrame().split("\n").flatMap((row, index) => row.includes("preview.txt") ? [index] : []);
+    expect(rows).toHaveLength(2);
+    const [fileRow, diffRow] = rows;
+    if (fileRow === undefined || diffRow === undefined) throw new Error("Missing file/diff entries");
+    child.write(`\x1b[<0;11;${fileRow + 1}M\x1b[<0;11;${fileRow + 1}m`);
+    await frame("File snapshot");
+    await frame("actual-diff-content");
+    expect(setup.captureCharFrame()).toContain("Working-tree contents");
+    child.write("q"); await frame("APP_READY");
+    child.write(`\x1b[<0;11;${diffRow + 1}M\x1b[<0;11;${diffRow + 1}m`);
     await frame("+actual-diff-content");
     expect(setup.captureCharFrame()).toContain("Untracked · file vs empty");
     child.write("q");

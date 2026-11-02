@@ -1,6 +1,6 @@
 # PorclainTree
 
-A terminal wrapper that runs your CLI beside a live, read-only Git changes list. Use it with a coding assistant, a shell, or another interactive command.
+A terminal wrapper that runs your CLI beside a read-only file explorer and live Git changes list. Use it with a coding assistant, a shell, or another interactive command.
 
 ## Getting started
 
@@ -28,17 +28,24 @@ Start inside a Git working tree, including any subfolder. If the initial Git rea
 - **Ctrl+G:** hide/show the sidebar.
 - **Ctrl+G twice within 300 ms:** restore the previous sidebar state and send one literal Ctrl+G to the child.
 - Below 100 terminal columns, the sidebar automatically collapses; widening restores your selected visibility.
+- **Click Files or Changes:** collapse/expand that section; the other gets the freed space.
+- **Mouse wheel over a section:** scroll that section independently.
+- **Click a folder in Files:** expand/collapse it. Click a file to preview its full working-tree contents.
 - **Click a changed filename or its directory row:** open a read-only diff snapshot. The selected entry stays highlighted until you close the preview.
-- **In the preview:** arrows scroll vertically/horizontally; Page Up/Down and Home/End move through the diff. **Esc**, **q**, or **Close** returns to the CLI. Typing and paste stay out of the child while the preview is open; **Ctrl+C** still reaches it.
+- **In the preview:** arrows scroll vertically/horizontally; Page Up/Down and Home/End move through the preview. **Esc**, **q**, or **Close** returns to the CLI. Typing and paste stay out of the child while the preview is open; **Ctrl+C** still reaches it.
 - Exit using your command's normal controls. PorclainTree returns its exit code.
 
-## Git sidebar
+## Sidebar
 
 The sidebar sits on the left and refreshes about once per second. It uses 34 columns in terminals at least 120 columns wide, and 28 columns at widths of 100–119.
 
+Files and Changes are stacked and open by default. When both lists need room, Files gets about 60% and Changes 40%; shorter lists give unused space to the other. Section headers show the visible row range when scrolling is needed.
+
+Files shows tracked and non-ignored untracked paths in expandable folders. Deleted paths and empty directories are omitted; submodule contents are not traversed. The file list is limited to 10,000 paths. A failed refresh keeps the last tree and marks it stale.
+
 The Margin layout connects the project header, change groups, and shortcut footer with a quiet rail. Status markers precede filenames, with directory paths shown below, relative to the Git repository root.
 
-The sidebar uses a black or white background with neutral gray text and restrained green, amber, and red status colors. Click the small **Dark/Light switch** at the top of the sidebar to change it. This affects only the sidebar; the child CLI keeps its own rendering and theme.
+The sidebar uses a black or white background with neutral gray text and restrained green, amber, and red status colors. Click the small **Dark/Light switch** at the top of the sidebar to change it. This affects the sidebar and preview; the child CLI keeps its own rendering and theme.
 
 The sidebar starts dark. Optionally set `PORCLAINTREE_THEME=light` or `PORCLAINTREE_THEME=dark` to choose its initial theme:
 
@@ -46,18 +53,18 @@ The sidebar starts dark. Optionally set `PORCLAINTREE_THEME=light` or `PORCLAINT
 PORCLAINTREE_THEME=light bun start -- codex
 ```
 
-Changes are grouped into unstaged, staged, untracked, and conflicted entries. A file with both staged and unstaged edits appears in both groups. The header counts distinct paths.
+Changes are grouped into unstaged, staged, untracked, and conflicted entries. A file with both staged and unstaged edits appears in both groups. The Changes header counts distinct paths.
 
 - `*` marks paths that already had changes when you started. The list shows current Git changes; it does not attribute edits to a particular session or assistant.
 - Untracked folders may appear as a single entry. Ignored untracked files stay excluded.
-- Long names and paths show `…`. An overflow count reports entries that do not fit vertically.
+- Long names and paths show `…`. Scroll within each section to reach entries that do not fit vertically.
 - A failed refresh labels the last successful list as stale. The child stays usable, and a successful refresh clears the warning.
 
-## Diff preview
+## File and diff previews
 
-The preview covers the right pane while your command keeps running underneath. It labels the selected comparison: staged changes against HEAD, unstaged changes against the index, untracked files against empty content, or a combined conflict diff. Click another entry to load a new snapshot; the displayed diff does not refresh automatically.
+The preview covers the right pane while your command keeps running underneath. Files opens the full UTF-8 working-tree file, including unchanged files. Changes opens the selected Git comparison: staged changes against HEAD, unstaged changes against the index, untracked files against empty content, or a combined conflict diff. Click another entry to load a new snapshot; previews do not refresh automatically.
 
-Previews never stage or edit files. Binary files show Git's summary; directory summaries cannot be expanded, and renames into or out of their own former directory path require direct Git inspection. Reads are limited to two seconds, 1 MiB, and 10,000 lines. Unsupported encoding or an unavailable file shows an explanation. Control characters are displayed as escaped text, tabs as four spaces, and long lines can be scrolled horizontally. Preview colors follow the sidebar switch without changing the child CLI's theme.
+Previews never stage or edit files. Binary files show Git's summary in diff previews and an explanation in file previews. Symlinks and non-regular files cannot be opened as text; directory summaries cannot be expanded, and renames into or out of their own former directory path require direct Git inspection. Reads are limited to two seconds, 1 MiB, and 10,000 lines. Unsupported encoding or an unavailable file shows an explanation. Control characters are displayed as escaped text, tabs as four spaces, and long lines can be scrolled horizontally. Preview colors follow the sidebar switch without changing the child CLI's theme.
 
 ## Development
 

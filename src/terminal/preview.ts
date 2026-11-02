@@ -1,10 +1,11 @@
 import { BoxRenderable, fg, StyledText, TextRenderable } from "@opentui/core";
 import type { CliRenderer, KeyEvent } from "@opentui/core";
-import type { DiffPreviewState } from "../diff-preview";
+import type { PreviewState } from "../preview";
 import { safeDisplay } from "./sidebar";
 import type { SidebarTheme } from "./theme";
 
 const comparisons = {
+  file: "Working-tree contents",
   staged: "Staged · index vs HEAD", unstaged: "Unstaged · worktree vs index",
   untracked: "Untracked · file vs empty", conflict: "Conflict · combined diff",
 } as const;
@@ -22,17 +23,17 @@ function viewport(text: string, left: number, width: number): string {
   return visible;
 }
 
-type MountedDiffPreview = Readonly<{
+type MountedPreview = Readonly<{
   isOpen: () => boolean;
-  setState: (state: DiffPreviewState) => void;
+  setState: (state: PreviewState) => void;
   setTheme: (palette: SidebarTheme) => void;
   resize: (left: number, width: number, height: number) => void;
   handleKey: (key: KeyEvent) => void;
   dispose: () => void;
 }>;
 
-export function mountDiffPreview(renderer: CliRenderer, initialPalette: SidebarTheme, close: () => void): MountedDiffPreview {
-  let state: DiffPreviewState = { kind: "closed" };
+export function mountPreview(renderer: CliRenderer, initialPalette: SidebarTheme, close: () => void): MountedPreview {
+  let state: PreviewState = { kind: "closed" };
   let palette = initialPalette;
   let lines: readonly string[] = [];
   let offset = 0;
@@ -41,15 +42,15 @@ export function mountDiffPreview(renderer: CliRenderer, initialPalette: SidebarT
   let columns = renderer.width;
   let rows = renderer.height;
   const box = new BoxRenderable(renderer, {
-    id: "diff-preview", position: "absolute", left: 0, top: 0,
+    id: "preview-preview", position: "absolute", left: 0, top: 0,
     width: renderer.width, height: renderer.height, zIndex: 20, visible: false,
     backgroundColor: palette.background, overflow: "hidden",
   });
-  const heading = new TextRenderable(renderer, { id: "diff-heading", height: 3, width: "100%", wrapMode: "none", selectable: false });
-  const body = new TextRenderable(renderer, { id: "diff-body", height: Math.max(0, renderer.height - 4), width: "100%", wrapMode: "none", selectable: false });
-  const footer = new TextRenderable(renderer, { id: "diff-footer", height: 1, width: "100%", wrapMode: "none", selectable: false });
+  const heading = new TextRenderable(renderer, { id: "preview-heading", height: 3, width: "100%", wrapMode: "none", selectable: false });
+  const body = new TextRenderable(renderer, { id: "preview-body", height: Math.max(0, renderer.height - 4), width: "100%", wrapMode: "none", selectable: false });
+  const footer = new TextRenderable(renderer, { id: "preview-footer", height: 1, width: "100%", wrapMode: "none", selectable: false });
   const closeButton = new TextRenderable(renderer, {
-    id: "diff-close", position: "absolute", right: 1, top: 0, width: 9, height: 1,
+    id: "preview-close", position: "absolute", right: 1, top: 0, width: 9, height: 1,
     content: "[ Close ]", selectable: false,
     onMouseDown(event) {
       if (event.button !== 0) return;
@@ -62,14 +63,15 @@ export function mountDiffPreview(renderer: CliRenderer, initialPalette: SidebarT
   function render(): void {
     box.visible = state.kind !== "closed";
     if (state.kind === "closed") return;
+    const comparison = state.selection.comparison;
     offset = Math.min(Math.max(0, lines.length - pageSize()), Math.max(0, offset));
     horizontal = Math.min(Math.max(0, maxWidth - columns), Math.max(0, horizontal));
     heading.content = new StyledText([
-      fg(palette.text)("Diff snapshot\n"), fg(palette.accent)(comparisons[state.selection.comparison] + "\n"),
+      fg(palette.text)(comparison === "file" ? "File snapshot\n" : "Diff snapshot\n"), fg(palette.accent)(comparisons[state.selection.comparison] + "\n"),
       fg(palette.muted)(safeDisplay(state.selection.path)),
     ]);
     body.content = new StyledText(lines.slice(offset, offset + pageSize()).flatMap((line, i) => {
-      const color = state.kind === "error" ? palette.warning : line.startsWith("+") ? palette.added
+      const color = state.kind === "error" ? palette.warning : comparison === "file" ? palette.text : line.startsWith("+") ? palette.added
         : line.startsWith("-") ? palette.deleted : line.startsWith("@@") ? palette.accent : palette.text;
       return [...(i ? [fg(palette.text)("\n")] : []), fg(color)(viewport(line, horizontal, columns))];
     }));
@@ -79,10 +81,10 @@ export function mountDiffPreview(renderer: CliRenderer, initialPalette: SidebarT
   }
   return {
     isOpen: () => state.kind !== "closed",
-    setState(next: DiffPreviewState) {
+    setState(next: PreviewState) {
       state = next; offset = 0; horizontal = 0;
-      lines = next.kind === "ready" ? (next.text ? next.text.replace(/\n$/, "").split("\n").map((line) => safeDisplay(line.replace(/\t/g, "    "))) : ["No differences in this snapshot."])
-        : next.kind === "loading" ? ["Loading diff…"] : next.kind === "error" ? [safeDisplay(next.error)] : [];
+      lines = next.kind === "ready" ? (next.text ? next.text.replace(/\n$/, "").split("\n").map((line) => safeDisplay(line.replace(/\t/g, "    "))) : [next.selection.comparison === "file" ? "(Empty file.)" : "No differences in this snapshot."])
+        : next.kind === "loading" ? [next.selection.comparison === "file" ? "Loading file…" : "Loading diff…"] : next.kind === "error" ? [safeDisplay(next.error)] : [];
       maxWidth = lines.reduce((width, line) => Math.max(width, Bun.stringWidth(line)), 0);
       render();
     },

@@ -138,10 +138,10 @@ test("native sidebar distinguishes filenames from paths and keeps its footer aft
     expect(child).toBeDefined();
     expect(filename?.fg.equals(directory?.fg)).toBe(false);
     expect(filename?.bg.toInts()).toEqual([0, 0, 0, 255]);
-    expect(setup.captureCharFrame().split("\n")[28]?.slice(0, 34)).toContain("╰─ Ctrl+G");
+    expect(setup.captureCharFrame().split("\n")[29]?.slice(0, 34)).toContain("╰─ Ctrl+G");
     setup.resize(110, 18);
     await setup.renderOnce();
-    expect(setup.captureCharFrame().split("\n")[16]?.slice(0, 28)).toContain("Ctrl+G");
+    expect(setup.captureCharFrame().split("\n")[17]?.slice(0, 28)).toContain("Ctrl+G");
     expect(setup.captureCharFrame()).toContain("before launch");
     session.setChanges(createChangesState([]));
     await waitForFrame(setup, "Working tree clean");
@@ -212,7 +212,7 @@ test("PORCLAINTREE_THEME forces a white sidebar in the actual CLI without a ligh
 
 test("clicking a file opens a scrollable preview without leaking typing or paste to the child", async () => {
   const setup = await createTestRenderer({ width: 120, height: 24, exitOnCtrlC: false });
-  const selected: import("../../src/git/diff").DiffSelection[] = [];
+  const selected: import("../../src/preview").PreviewSelection[] = [];
   const change = { path: "both.ts", indexStatus: "M", worktreeStatus: "M" };
   const session = mountTerminal(setup.renderer, {
     executable: process.execPath,
@@ -320,5 +320,85 @@ test("active file highlights only its comparison and follows preview lifetime an
     setup.mockInput.pressKey("q");
     await waitForFrame(setup, "child-ready");
     expect(background(current)).toEqual([255, 255, 255, 255]);
+  } finally { await session.dispose(); await setup.dispose(); }
+});
+
+test("stacked explorer expands folders, previews full files, and reclaims collapsed section space without resizing the child", async () => {
+  const setup = await createTestRenderer({ width: 120, height: 30, exitOnCtrlC: false });
+  const session = mountTerminal(setup.renderer, {
+    executable: "sh", args: ["-c", "stty -echo; echo child-ready; while read -r line; do stty size; done"],
+  }, process.cwd(), createChangesState([{ path: "modified.ts", indexStatus: " ", worktreeStatus: "M" }]), "fixture", "dark", (selection) => {
+    session.setPreview(selection ? { kind: "ready", selection, text: "+source-is-not-a-diff\nwhole file" } : { kind: "closed" });
+  }, { paths: ["src/inside.ts", ...Array.from({ length: 40 }, (_, i) => `root-${i}.ts`)], error: null });
+  const row = (text: string) => setup.captureCharFrame().split("\n").findIndex((line) => line.slice(0, 34).includes(text));
+  try {
+    await waitForFrame(setup, "child-ready");
+    expect(row("▾ Files")).toBeGreaterThan(0); expect(row("▾ Changes")).toBeGreaterThan(row("▾ Files"));
+    await setup.mockMouse.click(10, row("▸ src"));
+    await waitForFrame(setup, "inside.ts");
+    await setup.mockMouse.click(12, row("inside.ts"));
+    await waitForFrame(setup, "File snapshot");
+    expect(setup.captureCharFrame()).toContain("Working-tree contents");
+    const source = setup.captureSpans().lines.flatMap((line) => line.spans).find((span) => span.text.includes("+source-is-not-a-diff"));
+    expect(source?.fg.toInts()).toEqual([229, 229, 229, 255]);
+    await setup.mockMouse.click(10, row("▾ Files"));
+    await setup.renderOnce();
+    expect(row("▸ Files")).toBeGreaterThan(0); expect(row("inside.ts")).toBe(-1);
+    setup.mockInput.pressKey("q");
+    await setup.mockInput.typeText("size"); setup.mockInput.pressEnter();
+    await waitForFrame(setup, "30 86");
+    await setup.mockMouse.click(10, row("▸ Files"));
+    await waitForFrame(setup, "inside.ts");
+    await setup.mockMouse.click(10, row("▾ Changes"));
+    await setup.renderOnce();
+    expect(row("▸ Changes")).toBeGreaterThan(0);
+    expect(row("root-15.ts")).toBeGreaterThan(0);
+  } finally { await session.dispose(); await setup.dispose(); }
+});
+
+test("wheel scrolling stays in its section and selects the currently visible file after refresh", async () => {
+  const setup = await createTestRenderer({ width: 120, height: 30, exitOnCtrlC: false });
+  const selections: import("../../src/preview").PreviewSelection[] = [];
+  const session = mountTerminal(setup.renderer, { executable: "sh", args: ["-c", "echo ready; read -r line"] }, process.cwd(),
+    createChangesState(Array.from({ length: 30 }, (_, i) => ({ path: `change-${i}.ts`, indexStatus: " ", worktreeStatus: "M" }))),
+    "fixture", "dark", (selection) => { if (selection) selections.push(selection); },
+    { paths: Array.from({ length: 50 }, (_, i) => `file-${String(i).padStart(2, "0")}.ts`), error: null });
+  const row = (text: string) => setup.captureCharFrame().split("\n").findIndex((line) => line.slice(0, 34).includes(text));
+  try {
+    await waitForFrame(setup, "ready");
+    const changeRow = row("change-0.ts");
+    await setup.mockMouse.scroll(12, row("file-00.ts"), "down");
+    await setup.renderOnce();
+    expect(row("file-00.ts")).toBe(-1); expect(row("change-0.ts")).toBe(changeRow);
+    await setup.mockMouse.click(12, row("file-03.ts"));
+    expect(selections.at(-1)).toEqual({ path: "file-03.ts", comparison: "file" });
+    const fileRow = row("file-03.ts");
+    await setup.mockMouse.scroll(12, changeRow, "down"); await setup.renderOnce();
+    expect(row("file-03.ts")).toBe(fileRow); expect(row("change-0.ts")).toBe(-1);
+    session.setFiles({ paths: ["replacement.ts"], error: null });
+    await waitForFrame(setup, "replacement.ts");
+    await setup.mockMouse.click(12, row("replacement.ts"));
+    expect(selections.at(-1)).toEqual({ path: "replacement.ts", comparison: "file" });
+  } finally { await session.dispose(); await setup.dispose(); }
+});
+
+test("collapsing another section preserves scroll position and scrolling uses the visible offset", async () => {
+  const setup = await createTestRenderer({ width: 120, height: 30, exitOnCtrlC: false });
+  const session = mountTerminal(setup.renderer, { executable: "sh", args: ["-c", "echo ready; read -r line"] }, process.cwd(),
+    createChangesState(Array.from({ length: 30 }, (_, i) => ({ path: `change-${i}.ts`, indexStatus: " ", worktreeStatus: "M" }))),
+    "fixture", "dark", () => {}, { paths: Array.from({ length: 50 }, (_, i) => `file-${String(i).padStart(2, "0")}.ts`), error: null });
+  const row = (label: string) => setup.captureCharFrame().split("\n").findIndex((line) => line.slice(0, 34).includes(label));
+  const firstFile = () => setup.captureCharFrame().split("\n").find((line) => /file-\d+\.ts/.test(line.slice(0, 34)))?.match(/file-(\d+)\.ts/)?.[1];
+  try {
+    await waitForFrame(setup, "ready");
+    for (let i = 0; i < 18; i++) { await setup.mockMouse.scroll(12, row("▾ Files") + 1, "down"); await setup.renderOnce(); }
+    const original = firstFile(); expect(Number(original)).toBeGreaterThan(20);
+    await setup.mockMouse.click(10, row("▾ Changes")); await setup.renderOnce();
+    await setup.mockMouse.click(10, row("▸ Changes")); await setup.renderOnce();
+    expect(firstFile()).toBe(original);
+    await setup.mockMouse.click(10, row("▾ Changes")); await setup.renderOnce();
+    const expandedOffset = Number(firstFile());
+    await setup.mockMouse.scroll(12, row("▾ Files") + 1, "up"); await setup.renderOnce();
+    expect(Number(firstFile())).toBe(expandedOffset - 3);
   } finally { await session.dispose(); await setup.dispose(); }
 });

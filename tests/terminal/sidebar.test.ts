@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { formatSidebar, sidebarLayout, reduceSidebar, sidebarColumns } from "../../src/terminal/sidebar";
+import { changesRows, reduceSidebar, sidebarColumns } from "../../src/terminal/sidebar";
 import { applyStatus, createChangesState } from "../../src/git/status";
 
 describe("sidebar controls", () => {
@@ -42,196 +42,52 @@ describe("sidebar controls", () => {
   });
 });
 
-const plain = (state: ReturnType<typeof createChangesState>, rows = 30, columns = 29) =>
-  formatSidebar(state, "porcelain", rows, columns).map((line) => line.map((span) => span.text).join("")).join("\n");
+const plain = (state: ReturnType<typeof createChangesState>, columns = 29) => changesRows(state, columns).lines.map((line) => line.map((span) => span.text).join("")).join("\n");
 
-describe("sidebar presentation", () => {
-  const oldChange = Object.freeze({ path: "old.ts", indexStatus: " ", worktreeStatus: "M" });
-  const newChange = Object.freeze({ path: "new.ts", indexStatus: "?", worktreeStatus: "?" });
-
-  test("visible filename and directory rows retain exact comparison targets through clipping", () => {
-    const layout = sidebarLayout(createChangesState([
-      { path: "long-directory/both.ts", indexStatus: "M", worktreeStatus: "M" },
-    ]), "fixture", 30, 23);
+describe("change rows", () => {
+  test("partially staged files retain exact comparison targets for both filename and directory rows", () => {
+    const value = changesRows(createChangesState([{ path: "src/both.ts", indexStatus: "M", worktreeStatus: "M" }]), 23);
     for (const comparison of ["staged", "unstaged"]) {
-      const rows = layout.targets.filter((target) => target.selection.comparison === comparison);
-      expect(rows).toHaveLength(2);
-      expect(rows.every((target) => target.selection.path === "long-directory/both.ts")).toBe(true);
-      expect(rows.some((target) => layout.lines[target.row]?.some((span) => span.text.includes("both.ts")))).toBe(true);
+      const targets = value.targets.filter((target) => target.selection.comparison === comparison);
+      expect(targets).toHaveLength(2);
+      expect(targets.every((target) => target.selection.path === "src/both.ts")).toBe(true);
     }
-    const short = sidebarLayout(createChangesState(Array.from({ length: 20 }, (_, i) => ({ path: `dir/file-${i}`, indexStatus: "?", worktreeStatus: "?" }))), "fixture", 12, 23);
-    expect(short.targets.length).toBeLessThan(20);
-    expect(short.targets.every((target) => !short.lines[target.row]?.some((span) => /more entries|Ctrl\+G/.test(span.text)))).toBe(true);
+    expect(plain(createChangesState([{ path: "src/both.ts", indexStatus: "M", worktreeStatus: "M" }]))).toContain("├─ staged · 1\n┆  vs HEAD");
   });
-
-  test("groups both sides of a partially staged file with explicit baselines", () => {
-    const state = createChangesState([{ path: "src/both.ts", indexStatus: "M", worktreeStatus: "M" }]);
-    const text = plain(state);
-    expect(text).toContain("├─ unstaged · 1\n┆  vs index");
-    expect(text).toContain("├─ staged · 1\n┆  vs HEAD");
-    expect(text.match(/both\.ts/g)).toHaveLength(2);
-    expect(text).toContain("1 changed path");
-  });
-
-  test("conflicts appear once in their own group rather than as staged success", () => {
-    const text = plain(createChangesState([
+  test("conflicts, untracked directories and deletions keep their status and broken rail", () => {
+    const value = plain(createChangesState([
       { path: "conflict.ts", indexStatus: "U", worktreeStatus: "U" },
-      { path: "added-both.ts", indexStatus: "A", worktreeStatus: "A" },
+      { path: "src/new-folder/", indexStatus: "?", worktreeStatus: "?" },
+      { path: "gone.ts", indexStatus: " ", worktreeStatus: "D" },
     ]));
-    expect(text).toContain("├─ conflicts · 2");
-    expect(text).toMatch(/┆ {2}UU\* conflict\.ts/);
-    expect(text).toMatch(/┆ {2}AA\* added-both\.ts/);
-    expect(text).not.toContain("├─ staged");
-    expect(text.match(/conflict\.ts/g)).toHaveLength(1);
+    expect(value).toContain("├─ conflicts · 1"); expect(value).toContain("┆  UU* conflict.ts");
+    expect(value).toContain("new-folder/"); expect(value).toContain("src/"); expect(value).toContain("D* gone.ts");
   });
-
-  test("directory summaries retain their trailing slash and parent path", () => {
-    const text = plain(createChangesState([{ path: "src/new-folder/", indexStatus: "?", worktreeStatus: "?" }]));
-    expect(text).toContain("├─ untracked · 1");
-    expect(text).toContain("new-folder/");
-    expect(text).toContain("src/");
-    expect(text).toContain("?");
+  test("launch markers stay separate from later changes without mutating inputs", () => {
+    const original = Object.freeze(createChangesState([{ path: "old.ts", indexStatus: " ", worktreeStatus: "M" }]));
+    const updated = applyStatus(original, { ok: true, changes: [...original.changes, { path: "new.ts", indexStatus: "?", worktreeStatus: "?" }] });
+    expect(plain(updated)).toContain("M* old.ts"); expect(plain(updated)).toContain("?  new.ts");
+    expect(original.initialPaths.has("new.ts")).toBe(false); expect(original.changes).toHaveLength(1);
   });
-
-  test("long paths show truncation while retaining distinguishing filenames", () => {
-    const changes = ["FirstButton.ts", "SecondButton.ts"].map((name) => ({
-      path: `src/components/a-very-long-directory/${name}`, indexStatus: "?", worktreeStatus: "?",
-    }));
-    const text = plain(createChangesState(changes), 30, 23);
-    expect(text).toContain("…");
-    expect(text).toContain("FirstButton.ts");
-    expect(text).toContain("SecondButton.ts");
-    expect(text.split("\n").every((line) => Bun.stringWidth(line) <= 23)).toBe(true);
-  });
-
-  test("keeps launch-dirty paths distinct from later additions without mutating inputs", () => {
-    const initial = Object.freeze(createChangesState(Object.freeze([oldChange])));
-    const updated = applyStatus(initial, { ok: true, changes: Object.freeze([oldChange, newChange]) });
-    const text = plain(updated);
-    expect(text).toMatch(/┆ {2}M\* old\.ts/);
-    expect(text).toMatch(/┆ {2}\? {2}new\.ts/);
-    expect(text).toContain("* changed before launch");
-    expect(initial.changes).toEqual([oldChange]);
-    expect(initial.initialPaths.has("new.ts")).toBe(false);
-  });
-
-  test("a failed refresh preserves the last good list and recovery clears stale status", () => {
-    const initial = createChangesState([oldChange]);
-    const stale = applyStatus(initial, { ok: false, error: "Git timed out" });
-    expect(plain(stale)).toContain("Git unavailable");
-    expect(plain(stale)).toContain("Showing last result");
-    expect(plain(stale)).toContain("Git timed out");
-    expect(plain(stale)).toContain("old.ts");
-    const recovered = applyStatus(stale, { ok: true, changes: [] });
-    expect(plain(recovered)).toContain("Working tree clean");
-    expect(plain(recovered)).not.toContain("unavailable");
-    expect(plain(recovered)).not.toContain("* changed before launch");
-  });
-
-  test("a stale clean result never claims the current working tree is clean", () => {
-    const state = applyStatus(createChangesState([]), { ok: false, error: "offline" });
-    expect(plain(state)).toContain("Last result: clean");
-    expect(plain(state)).not.toContain("Working tree clean");
-    expect(plain(state)).toContain("Git unavailable");
-  });
-
-  test("compact stale layouts keep the last-result label, diagnostic, and bottom shortcut", () => {
-    const state = applyStatus(createChangesState([oldChange]), { ok: false, error: "Git timed out" });
-    for (const height of [5, 8, 15]) {
-      const text = plain(state, height, 23);
-      expect(text.split("\n")).toHaveLength(height);
-      expect(text).toContain("Git unavailable");
-      expect(text).toContain("Git timed out");
-      expect(text.toLowerCase()).toContain("last");
-      expect(text.split("\n").at(-1)).toContain("Ctrl+G");
-      if (height === 15) {
-        expect(text).toContain("Showing last result");
-        expect(text).toContain("old.ts");
-      }
+  test("stale results retain paths and diagnostics, including a previously clean result", () => {
+    for (const changes of [[], [{ path: "old.ts", indexStatus: " ", worktreeStatus: "M" }]]) {
+      const stale = applyStatus(createChangesState(changes), { ok: false, error: "Git timed out\x1b" });
+      const value = plain(stale);
+      expect(value).toContain("Git unavailable"); expect(value).toContain("Showing last result");
+      expect(value).toContain("Git timed out\\u001b"); expect(value).not.toContain("Working tree clean");
+      if (changes.length) expect(value).toContain("old.ts"); else expect(value).toContain("Last result: clean");
+      expect(plain(applyStatus(stale, { ok: true, changes: [] }))).toContain("Working tree clean");
     }
   });
-
-  test("a four-row fallback keeps its shortcut on the fourth row", () => {
-    const text = plain(createChangesState([]), 4);
-    expect(text.split("\n")).toHaveLength(4);
-    expect(text.split("\n")[3]).toContain("Ctrl+G");
-  });
-
-  test("tiny stale windows prioritize the last-result label and diagnostic over branding", () => {
-    for (const changes of [[], [oldChange]]) {
-      const state = applyStatus(createChangesState(changes), { ok: false, error: "Git timed out" });
-      for (const height of [3, 4]) {
-        const text = plain(state, height, 23);
-        const lines = text.split("\n");
-        expect(lines).toHaveLength(height);
-        expect(text).toContain("stale");
-        expect(text).toContain("last result");
-        expect(text).toContain("Git timed out");
-        expect(text).not.toContain("Working tree clean");
-        expect(lines.at(-1)).toBe("╰─ Ctrl+G  hide sidebar");
-        expect(lines.every((row) => Bun.stringWidth(row) <= 23)).toBe(true);
-      }
-    }
-  });
-
-  test("the rail connects header, group, file, continuation, and closing shortcut", () => {
-    const text = plain(createChangesState([
-      { path: "src/terminal/view.ts", indexStatus: " ", worktreeStatus: "M" },
-    ]));
-    const lines = text.split("\n");
-    expect(lines[1]).toBe("╭─ porclain/tree");
-    expect(lines[2]).toBe("┆  porcelain/");
-    expect(text).toContain("┆  M* view.ts\n┆     src/terminal/");
-    expect(lines.slice(1, -1).every((row) => /^[╭├┆╰]/u.test(row))).toBe(true);
-    expect(lines[28]).toBe("╰─ Ctrl+G  hide sidebar");
-  });
-
-  test("file suffixes survive the rail and two-character conflict marker at narrow width", () => {
-    const text = plain(createChangesState([
+  test("control escaping and grapheme clipping retain filename suffixes and marker cells", () => {
+    const state = createChangesState([
       { path: "deep/directory/a-very-long-conflict-name.ts", indexStatus: "U", worktreeStatus: "U" },
-    ]), 30, 23);
-    const fileRow = text.split("\n").find((row) => row.includes("UU*"));
-    expect(fileRow).toBeDefined();
-    expect(fileRow).toContain("…");
-    expect(fileRow).toEndWith("…onflict-name.ts");
-    expect(Bun.stringWidth(fileRow ?? "")).toBeLessThanOrEqual(23);
-  });
-
-  test("escapes controls in filenames, project identity, and Git diagnostics", () => {
-    const state = applyStatus(createChangesState([
-      { path: "name\n\x1b.ts", indexStatus: "?", worktreeStatus: "?" },
-    ]), { ok: false, error: "bad\r\x1b[31m" });
-    const text = formatSidebar(state, "project\n\x1b", 30, 29)
-      .map((line) => line.map((span) => span.text).join("")).join("\n");
-    expect(text).toContain("name\\n\\u001b.ts");
-    expect(text).toContain("project\\n\\u001b");
-    expect(text).toContain("bad\\r\\u001b[31m");
-    expect(text).not.toContain("\x1b");
-  });
-
-  test("overflow stays bounded and the shortcut footer remains at the bottom", () => {
-    const changes = Array.from({ length: 20 }, (_, i) => ({
-      path: `src/file-${i}.ts`, indexStatus: "?", worktreeStatus: "?",
-    }));
-    for (const height of [8, 12, 20, 30]) {
-      const text = plain(createChangesState(changes), height, 23);
-      const lines = text.split("\n");
-      expect(lines).toHaveLength(height);
-      expect(text).toContain("more entries");
-      expect(text).toContain("Ctrl+G");
-      expect(text).toContain("before launch");
-      expect(lines.slice(-2).join("\n")).toContain("Ctrl+G");
-      expect(lines.every((line) => Bun.stringWidth(line) <= 23)).toBe(true);
-    }
-  });
-
-  test("tiny heights and Unicode graphemes stay inside the available cells", () => {
-    const state = createChangesState([{ path: "src/👨‍👩‍👧‍👦-é-文件-very-long-name.ts", indexStatus: "?", worktreeStatus: "?" }]);
-    for (const height of [0, 1, 2, 4, 8, 16]) {
-      const lines = formatSidebar(state, "porcelain", height, 12);
-      expect(lines.length).toBeLessThanOrEqual(height);
-      expect(lines.every((line) => Bun.stringWidth(line.map((span) => span.text).join("")) <= 12)).toBe(true);
-      expect(lines.flatMap((line) => line).every((span) => !span.text.includes("\ufffd"))).toBe(true);
-    }
+      { path: "src/name\n\x1b.ts", indexStatus: "?", worktreeStatus: "?" },
+    ]);
+    const value = changesRows(state, 23);
+    expect(plain(state, 23)).toContain("UU* …onflict-name.ts");
+    expect(plain(state, 23)).toContain("name\\n\\u001b.ts");
+    expect(value.lines.every((line) => Bun.stringWidth(line.map((span) => span.text).join("")) <= 23)).toBe(true);
+    expect(plain(state, 23)).not.toContain("\x1b");
   });
 });

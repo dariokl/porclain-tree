@@ -1,10 +1,12 @@
 import { createCliRenderer } from "@opentui/core";
 import { basename } from "node:path";
 import type { CommandSpec } from "./command";
-import { loadGitProject } from "./git/client";
+import { listProjectFiles, readProjectFile } from "./files/client";
+import type { FileListState } from "./files/tree";
+import { loadGitProject, readGitStatus } from "./git/client";
 import { pollGitStatus } from "./git/polling";
 import { applyStatus, createChangesState } from "./git/status";
-import { createDiffPreview } from "./diff-preview";
+import { createPreview } from "./preview";
 import { readGitDiff } from "./git/diff";
 import { mountTerminal } from "./terminal/view";
 
@@ -16,6 +18,8 @@ export async function runApp(command: CommandSpec, cwd: string): Promise<AppResu
   const project = await loadGitProject(cwd);
   if (!project.ok) return { ok: false, exitCode: 2, error: project.error };
 
+  const initialFiles = await listProjectFiles(project.root);
+  let files: FileListState = { paths: initialFiles.ok ? initialFiles.paths : [], error: initialFiles.ok ? null : initialFiles.error };
   const renderer = await createCliRenderer({
     exitOnCtrlC: false, exitSignals: [], consoleMode: "disabled", openConsoleOnError: false,
   });
@@ -24,8 +28,8 @@ export async function runApp(command: CommandSpec, cwd: string): Promise<AppResu
   let polling: ReturnType<typeof pollGitStatus> | undefined;
   let signalCode: number | undefined;
   const failure = Promise.withResolvers<never>();
-  const preview = createDiffPreview(
-    (selection, signal) => readGitDiff(project.root, selection, signal),
+  const preview = createPreview(
+    (selection, signal) => selection.comparison === "file" ? readProjectFile(project.root, selection.path, signal) : readGitDiff(project.root, selection, signal),
     (next) => session?.setPreview(next), failure.reject,
   );
   const stop = (code: number) => {
@@ -44,11 +48,20 @@ export async function runApp(command: CommandSpec, cwd: string): Promise<AppResu
   try {
     const requestedTheme = process.env.PORCLAINTREE_THEME;
     const themeMode = requestedTheme === "light" ? "light" : "dark";
-    const mounted = mountTerminal(renderer, command, cwd, state, basename(project.root) || project.root, themeMode, preview.select);
+    const mounted = mountTerminal(renderer, command, cwd, state, basename(project.root) || project.root, themeMode, preview.select, files);
     session = mounted;
     polling = pollGitStatus(project.root, (result) => {
       state = applyStatus(state, result);
       mounted.setChanges(state);
+    }, async (root, signal) => {
+      const status = await readGitStatus(root, signal);
+      if (signal.aborted) return status;
+      const listed = await listProjectFiles(root, signal);
+      if (!signal.aborted) {
+        files = listed.ok ? { paths: listed.paths, error: null } : { ...files, error: listed.error };
+        mounted.setFiles(files);
+      }
+      return status;
     });
     renderer.start();
     const code = await Promise.race([mounted.exited, failure.promise, polling.done.then(() => mounted.exited)]);

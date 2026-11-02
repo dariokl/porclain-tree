@@ -1,18 +1,21 @@
-import type { DiffSelection, GitDiffResult } from "./git/diff";
+import type { DiffSelection } from "./git/diff";
 
-export type DiffPreviewState =
+export type PreviewSelection = DiffSelection | Readonly<{ path: string; comparison: "file" }>;
+export type PreviewResult = Readonly<{ ok: true; text: string }> | Readonly<{ ok: false; error: string }>;
+
+export type PreviewState =
   | Readonly<{ kind: "closed" }>
-  | Readonly<{ kind: "loading"; selection: DiffSelection }>
-  | Readonly<{ kind: "ready"; selection: DiffSelection; text: string }>
-  | Readonly<{ kind: "error"; selection: DiffSelection; error: string }>;
+  | Readonly<{ kind: "loading"; selection: PreviewSelection }>
+  | Readonly<{ kind: "ready"; selection: PreviewSelection; text: string }>
+  | Readonly<{ kind: "error"; selection: PreviewSelection; error: string }>;
 
-export function createDiffPreview(
-  read: (selection: DiffSelection, signal: AbortSignal) => Promise<GitDiffResult>,
-  publish: (state: DiffPreviewState) => void,
+export function createPreview(
+  read: (selection: PreviewSelection, signal: AbortSignal) => Promise<PreviewResult>,
+  publish: (state: PreviewState) => void,
   fail: (error: unknown) => void,
-): Readonly<{ select: (selection: DiffSelection | null) => void; stop: () => Promise<void> }> {
+): Readonly<{ select: (selection: PreviewSelection | null) => void; stop: () => Promise<void> }> {
   let sequence = 0;
-  let pending: Readonly<{ selection: DiffSelection; sequence: number }> | null = null;
+  let pending: Readonly<{ selection: PreviewSelection; sequence: number }> | null = null;
   let active: AbortController | undefined;
   let worker: Promise<void> | undefined;
   let stopped = false;
@@ -21,7 +24,7 @@ export function createDiffPreview(
       const request = pending;
       pending = null;
       const controller = new AbortController(); active = controller;
-      let result: GitDiffResult;
+      let result: PreviewResult;
       try { result = await read(request.selection, controller.signal); }
       finally { active = undefined; }
       if (!stopped && !controller.signal.aborted && request.sequence === sequence) {

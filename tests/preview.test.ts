@@ -1,12 +1,12 @@
 import { expect, test } from "bun:test";
-import { createDiffPreview } from "../src/diff-preview";
-import type { DiffPreviewState } from "../src/diff-preview";
-import type { DiffSelection, GitDiffResult } from "../src/git/diff";
+import { createPreview } from "../src/preview";
+import type { PreviewState, PreviewSelection } from "../src/preview";
+import type { GitDiffResult } from "../src/git/diff";
 
 test("selection bursts keep one active read and coalesce to the latest pending selection", async () => {
-  const reads: { selection: DiffSelection; signal: AbortSignal; result: ReturnType<typeof Promise.withResolvers<GitDiffResult>> }[] = [];
-  const states: DiffPreviewState[] = [];
-  const loader = createDiffPreview((selection, signal) => {
+  const reads: { selection: PreviewSelection; signal: AbortSignal; result: ReturnType<typeof Promise.withResolvers<GitDiffResult>> }[] = [];
+  const states: PreviewState[] = [];
+  const loader = createPreview((selection, signal) => {
     const result = Promise.withResolvers<GitDiffResult>(); reads.push({ selection, signal, result }); return result.promise;
   }, (state) => states.push(state), (error) => { throw error; });
   loader.select({ path: "a", comparison: "staged" });
@@ -25,8 +25,8 @@ test("selection bursts keep one active read and coalesce to the latest pending s
 
 test("close cancels loading, ignores late results, and disposal prevents new reads", async () => {
   const result = Promise.withResolvers<GitDiffResult>();
-  const states: DiffPreviewState[] = []; let signal: AbortSignal | undefined;
-  const loader = createDiffPreview((_selection, current) => { signal = current; return result.promise; },
+  const states: PreviewState[] = []; let signal: AbortSignal | undefined;
+  const loader = createPreview((_selection, current) => { signal = current; return result.promise; },
     (state) => states.push(state), (error) => { throw error; });
   loader.select({ path: "file", comparison: "unstaged" }); loader.select(null);
   expect(signal?.aborted).toBe(true); expect(states.at(-1)).toEqual({ kind: "closed" });
@@ -36,8 +36,8 @@ test("close cancels loading, ignores late results, and disposal prevents new rea
 });
 
 test("operational errors are shown and a later selection can recover", async () => {
-  const states: DiffPreviewState[] = []; let attempt = 0;
-  const loader = createDiffPreview(async () => ++attempt === 1 ? { ok: false, error: "unavailable" } : { ok: true, text: "recovered" },
+  const states: PreviewState[] = []; let attempt = 0;
+  const loader = createPreview(async () => ++attempt === 1 ? { ok: false, error: "unavailable" } : { ok: true, text: "recovered" },
     (state) => states.push(state), (error) => { throw error; });
   loader.select({ path: "file", comparison: "staged" }); await Bun.sleep(0);
   expect(states.at(-1)?.kind).toBe("error");
@@ -48,9 +48,9 @@ test("operational errors are shown and a later selection can recover", async () 
 
 test("disposal waits for its aborted in-flight read and never publishes its completion", async () => {
   const result = Promise.withResolvers<GitDiffResult>();
-  const states: DiffPreviewState[] = [];
+  const states: PreviewState[] = [];
   let signal: AbortSignal | undefined;
-  const loader = createDiffPreview((_selection, current) => { signal = current; return result.promise; },
+  const loader = createPreview((_selection, current) => { signal = current; return result.promise; },
     (state) => states.push(state), (error) => { throw error; });
   loader.select({ path: "file", comparison: "unstaged" });
   let settled = false;
@@ -59,4 +59,18 @@ test("disposal waits for its aborted in-flight read and never publishes its comp
   expect(signal?.aborted).toBe(true); expect(settled).toBe(false);
   result.resolve({ ok: false, error: "cancelled" }); await stop;
   expect(settled).toBe(true); expect(states).toHaveLength(1);
+});
+
+
+test("switching from a diff to file contents keeps only the latest content snapshot", async () => {
+  const first = Promise.withResolvers<GitDiffResult>();
+  const states: PreviewState[] = [];
+  const preview = createPreview(async (selection) => selection.comparison === "file" ? { ok: true, text: "full contents" } : first.promise,
+    (state) => states.push(state), (error) => { throw error; });
+  preview.select({ path: "same.ts", comparison: "staged" });
+  preview.select({ path: "same.ts", comparison: "file" });
+  first.resolve({ ok: true, text: "stale diff" }); await Bun.sleep(0);
+  expect(states.at(-1)).toEqual({ kind: "ready", selection: { path: "same.ts", comparison: "file" }, text: "full contents" });
+  expect(states.some((state) => state.kind === "ready" && state.text === "stale diff")).toBe(false);
+  await preview.stop();
 });
