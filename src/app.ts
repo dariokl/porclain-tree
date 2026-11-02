@@ -1,4 +1,5 @@
 import { createCliRenderer } from "@opentui/core";
+import { basename } from "node:path";
 import type { CommandSpec } from "./command";
 import { loadGitProject } from "./git/client";
 import { pollGitStatus } from "./git/polling";
@@ -35,7 +36,7 @@ export async function runApp(command: CommandSpec, cwd: string): Promise<AppResu
   renderer.on("render:error", onError);
   renderer.on("handler:error", onError);
   try {
-    const mounted = mountTerminal(renderer, command, cwd, state);
+    const mounted = mountTerminal(renderer, command, cwd, state, basename(project.root) || project.root);
     session = mounted;
     polling = pollGitStatus(project.root, (result) => {
       state = applyStatus(state, result);

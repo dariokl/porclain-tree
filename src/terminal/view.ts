@@ -1,11 +1,24 @@
-import { BoxRenderable, EmbeddedTerminalRenderable, KeyEvent, TextRenderable } from "@opentui/core";
+import { bold, BoxRenderable, EmbeddedTerminalRenderable, fg, KeyEvent, StyledText, TextRenderable } from "@opentui/core";
 import type { CliRenderer } from "@opentui/core";
 import type { CommandSpec } from "../command";
 import type { ChangesState } from "../git/status";
 import { startPty } from "./pty";
 import type { PtySession } from "./pty";
-import { formatChanges, reduceSidebar, sidebarColumns } from "./sidebar";
+import { formatSidebar, reduceSidebar, sidebarColumns } from "./sidebar";
 import type { SidebarState } from "./sidebar";
+import { sidebarTheme } from "./theme";
+import type { SidebarTheme } from "./theme";
+
+function sidebarText(changes: ChangesState, projectName: string, rows: number, width: number, palette: SidebarTheme): StyledText {
+  const lines = formatSidebar(changes, projectName, rows, Math.max(0, width - 5));
+  return new StyledText(lines.flatMap((line, index) => [
+    ...(index > 0 ? [fg(palette.text)("\n")] : []),
+    ...line.map((span) => {
+      const chunk = fg(palette[span.tone])(span.text);
+      return span.bold ? bold(chunk) : chunk;
+    }),
+  ]));
+}
 
 type MountedTerminal = Readonly<{
   exited: Promise<number>;
@@ -18,9 +31,11 @@ export function mountTerminal(
   command: CommandSpec,
   cwd: string,
   initialChanges: ChangesState,
+  projectName: string,
 ): MountedTerminal {
   let state: SidebarState = { visible: true, lastToggleAt: null };
   let changes = initialChanges;
+  let palette = sidebarTheme(renderer.themeMode);
   let child: PtySession | undefined;
   const layout = new BoxRenderable(renderer, {
     id: "workspace", width: "100%", height: "100%", flexDirection: "row",
@@ -33,11 +48,13 @@ export function mountTerminal(
   });
   const sidebar = new BoxRenderable(renderer, {
     id: "sidebar", width: sidebarColumns(renderer.width, true), height: "100%",
-    flexShrink: 0, border: ["right"], borderColor: "#666666", paddingLeft: 1,
+    flexShrink: 0, border: ["right"], borderColor: palette.border,
+    backgroundColor: palette.background, paddingLeft: 2, paddingRight: 2, overflow: "hidden",
   });
   const instructions = new TextRenderable(renderer, {
     id: "changes", width: "100%", height: "100%", wrapMode: "none",
-    content: formatChanges(changes, renderer.height),
+    fg: palette.text, bg: palette.background,
+    content: sidebarText(changes, projectName, renderer.height, sidebarColumns(renderer.width, true), palette),
   });
   sidebar.add(instructions);
   layout.add(sidebar);
@@ -50,8 +67,16 @@ export function mountTerminal(
     sidebar.visible = width > 0;
     terminal.width = Math.max(1, renderer.width - width);
     terminal.height = Math.max(1, renderer.height);
-    instructions.content = formatChanges(changes, renderer.height);
+    instructions.content = sidebarText(changes, projectName, renderer.height, width, palette);
     child?.resize(Math.max(1, renderer.width - width), Math.max(1, renderer.height));
+  };
+  const onTheme = (mode: "light" | "dark") => {
+    palette = sidebarTheme(mode);
+    sidebar.backgroundColor = palette.background;
+    sidebar.borderColor = palette.border;
+    instructions.bg = palette.background;
+    instructions.fg = palette.text;
+    instructions.content = sidebarText(changes, projectName, renderer.height, sidebarColumns(renderer.width, state.visible), palette);
   };
   const ordinaryInput = () => { state = reduceSidebar(state, { type: "input" }).state; };
   const keypress = (key: KeyEvent) => {
@@ -85,6 +110,7 @@ export function mountTerminal(
   }
   const session = child;
   renderer.on("resize", resize);
+  renderer.on("theme_mode", onTheme);
   renderer.keyInput.on("keypress", keypress);
   renderer.keyInput.on("paste", ordinaryInput);
   resize();
@@ -93,6 +119,7 @@ export function mountTerminal(
   let disposal: Promise<void> | undefined;
   async function shutdown(): Promise<void> {
     renderer.off("resize", resize);
+    renderer.off("theme_mode", onTheme);
     renderer.keyInput.off("keypress", keypress);
     renderer.keyInput.off("paste", ordinaryInput);
     try {
@@ -106,7 +133,7 @@ export function mountTerminal(
     setChanges(nextState) {
       if (disposal) return;
       changes = nextState;
-      instructions.content = formatChanges(changes, renderer.height);
+      instructions.content = sidebarText(changes, projectName, renderer.height, sidebarColumns(renderer.width, state.visible), palette);
     },
     dispose: () => disposal ??= shutdown(),
   };

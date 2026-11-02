@@ -25,18 +25,24 @@ Start inside a Git working tree, including any subfolder. If the initial Git rea
 
 ## Controls
 
-- **Ctrl+G:** hide/show the 28-column sidebar.
+- **Ctrl+G:** hide/show the sidebar.
 - **Ctrl+G twice within 300 ms:** restore the previous sidebar state and send one literal Ctrl+G to the child.
 - Below 100 terminal columns, the sidebar automatically collapses; widening restores your selected visibility.
 - Exit using your command's normal controls. PorclainTree returns its exit code.
 
 ## Git sidebar
 
-The sidebar sits on the left and refreshes about once per second. Paths are relative to the Git repository root.
+The sidebar sits on the left and refreshes about once per second. It uses 34 columns in terminals at least 120 columns wide, and 28 columns at widths of 100–119.
+
+The Margin layout connects the project header, change groups, and shortcut footer with a quiet rail. Status markers precede filenames, with directory paths shown below, relative to the Git repository root.
+
+The sidebar uses quiet light/dark colors based on theme hints already available from the terminal UI. It defaults to dark when no hint is available. These colors apply to the sidebar; the child CLI keeps its own rendering and theme.
+
+Changes are grouped into unstaged, staged, untracked, and conflicted entries. A file with both staged and unstaged edits appears in both groups. The header counts distinct paths.
 
 - `*` marks paths that already had changes when you started. The list shows current Git changes; it does not attribute edits to a particular session or assistant.
 - Untracked folders may appear as a single entry. Ignored untracked files stay excluded.
-- Long paths show `…` and retain the filename end. An overflow count reports entries that do not fit vertically.
+- Long names and paths show `…`. An overflow count reports entries that do not fit vertically.
 - A failed refresh labels the last successful list as stale. The child stays usable, and a successful refresh clears the warning.
 
 ## Development
